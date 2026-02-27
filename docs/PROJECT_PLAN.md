@@ -282,7 +282,7 @@ class CrawlRun:
     total_duplicates_found: int
     total_errors: int
     total_bytes_downloaded: int
-    resume_checkpoint: str | None  # Serialized frontier state for resume
+    crawlee_storage_dir: str | None  # Path to Crawlee's persistent storage for this run (resume)
     created_at: datetime
 ```
 
@@ -506,8 +506,10 @@ data/
         {sha256_prefix2}/{sha256}.{ext}   # Raw downloaded files
       extracted/
         {sha256_prefix2}/{sha256}.txt     # Extracted text
-      checkpoints/
-        checkpoint_{n}.json  # Frontier snapshots
+      crawlee_storage/       # Crawlee's internal persistent storage
+        request_queues/      #   Persistent RequestQueue (auto-resume)
+        datasets/            #   Crawlee datasets (optional)
+        key_value_stores/    #   Crawlee KV store (session data, etc.)
 ```
 
 **Database (SQLite MVP):**
@@ -582,12 +584,13 @@ llm:
 crawl:
   max_depth: 3
   max_pages: 1000
-  default_rate_limit_rps: 1.0
-  request_timeout_seconds: 30
-  download_timeout_seconds: 120
-  max_retries: 3
-  concurrent_requests: 10
-  respect_robots_txt: true      # Cannot be set to false
+  max_tasks_per_minute: 60       # Crawlee global rate cap (~1 req/sec average)
+  default_rate_limit_rps: 1.0    # Our per-domain rate limiter
+  download_timeout_seconds: 120   # For file downloads (our httpx downloader)
+  max_retries: 3                  # Crawlee retry count
+  max_concurrency: 10             # Crawlee AutoscaledPool upper bound
+  min_concurrency: 1
+  respect_robots_txt: true        # Cannot be set to false (Crawlee flag)
   user_agent: "webcollector/0.1 (+https://github.com/yourorg/webcollector)"
 
   # Per-domain overrides
@@ -599,9 +602,9 @@ crawl:
       rate_limit_rps: 0.33
       adapter: arxiv
 
-fetch:
-  use_playwright: auto          # auto | always | never
-  playwright_pool_size: 3
+browser:
+  playwright_pool_size: 3         # Crawlee max_open_pages
+  rendering_mode: adaptive        # adaptive | playwright_only | http_only
   block_resources:
     - image
     - font
@@ -720,11 +723,11 @@ class BaseSiteAdapter(ABC):
         """Return seed URLs specific to this site."""
 
     @abstractmethod
-    async def extract(self, response: FetchResponse) -> list[Document]:
-        """Custom extraction logic for this site's pages."""
+    async def extract(self, context: AdaptivePlaywrightCrawlingContext) -> list[Document]:
+        """Custom extraction logic for this site's pages. Receives Crawlee context."""
 
     def get_rate_limit(self) -> float:
-        """Override rate limit for this site."""
+        """Override rate limit for this site (used by per-domain limiter)."""
         return 1.0
 ```
 
@@ -780,12 +783,12 @@ sqlite = "webcollector.storage.sqlite_store:SQLiteStore"
 
 | Library | Purpose | Why This One |
 |---|---|---|
-| `httpx` | Async HTTP client | HTTP/2 support, connection pooling, async-native, clean API. Superior to `aiohttp` for our use case. |
-| `playwright` | JS-rendered pages | More reliable than Selenium, async-native Python bindings, auto-manages browser binaries. |
-| `beautifulsoup4` + `lxml` | HTML parsing | BS4 for ease of use + tolerant parsing; lxml as the fast parser backend. |
+| `crawlee` | Crawl orchestration | asyncio-native. Provides request queue, dedup, retry, robots.txt, session management, `AdaptivePlaywrightCrawler` (auto httpx/Playwright), `AutoscaledPool`, fingerprint generation. Eliminates 3-6 weeks of custom plumbing. v1.4+ is production-ready. |
+| `beautifulsoup4` + `lxml` | HTML parsing | BS4 for ease of use + tolerant parsing; lxml as the fast parser backend. Used inside Crawlee's request handlers. |
 | `readability-lxml` | Article extraction | Battle-tested port of Mozilla Readability. Extracts main content, strips boilerplate. |
 | `mistralai` (Python SDK) | PDF text extraction via Mistral OCR API | Handles text-layer and scanned PDFs in one call. Returns structured Markdown. Cheap ($0.1/1K pages), fast, excellent quality — eliminates the need for local Tesseract in most cases. |
 | `pdfplumber` | Local PDF fallback | Offline fallback for text-layer PDFs when Mistral API is unavailable or user prefers local-only. |
+| `httpx` | File downloads | Used for streaming binary file downloads (PDFs, DOCX, etc.) outside of Crawlee's HTML pipeline. Crawlee uses httpx internally for HTTP crawling. |
 | `python-docx` | DOCX extraction | Standard, well-maintained, handles most Word documents. |
 | `click` | CLI framework | Composable, well-documented, supports complex command trees. Better than argparse for our needs. |
 | `structlog` | Structured logging | JSON logging with context binding. Essential for debugging crawl runs. |
@@ -793,47 +796,38 @@ sqlite = "webcollector.storage.sqlite_store:SQLiteStore"
 | `sqlalchemy` (Core only) | Database abstraction | Works with SQLite and Postgres. Core (not ORM) for performance. |
 | `langdetect` | Language detection | Lightweight, no large model downloads. |
 | `anthropic` / `openai` | LLM API clients | For query interpretation. Anthropic preferred (Claude Haiku is fast and cheap). |
-| `mistralai` | Mistral API client | For PDF-to-text via Mistral OCR (`mistral-ocr-latest`). ~$0.1/1K pages. |
 
-### H.2 Playwright vs httpx Decision Logic
+### H.2 Playwright vs httpx Decision Logic (Crawlee `AdaptivePlaywrightCrawler`)
 
-```
-Use httpx (default) when:
-  - Page serves static HTML
-  - Content is in initial HTML response
-  - Site is a simple CMS, document server, or API
+Crawlee's `AdaptivePlaywrightCrawler` handles this automatically:
 
-Use Playwright when:
-  - Config explicitly sets use_playwright: always for a domain
-  - httpx fetch returns <5KB body AND page is expected to have content (likely JS-rendered)
-  - Site is known SPA (React/Angular/Vue) based on framework detection in initial HTML
-  - Site adapter specifies browser rendering
+1. **`RenderingTypePredictor`** — machine-learned model that predicts per-domain whether httpx or Playwright is needed.
+2. On first visit to a domain, it may try both methods and compare results via `result_comparator`.
+3. Our custom **`result_checker`** validates that the extracted content is meaningful (e.g., >200 chars of text, expected CSS selectors present). If the httpx result fails the check, Playwright is used.
+4. Decision is cached per domain for the rest of the crawl run.
+5. **Override:** Site adapters can force Playwright via `Request(url, user_data={"rendering_type": "playwright"})`.
 
-Auto-detection heuristic:
-  1. Fetch with httpx first
-  2. If response body contains JS framework markers (e.g., <div id="root"></div> with minimal content,
-     "window.__NEXT_DATA__" without pre-rendered content) AND extracted text < 200 chars
-  3. Re-fetch with Playwright
-  4. Cache the decision per domain for the rest of the crawl run
-```
+**When we still use raw httpx (outside Crawlee):**
+- Streaming file downloads (PDFs, DOCX, etc.) — these bypass Crawlee's HTML pipeline entirely.
 
 ### H.3 Concurrency Model
 
-**Primary: asyncio event loop (single process)**
-- All I/O (HTTP requests, file writes, DB queries) via async.
-- `asyncio.Semaphore` for per-domain concurrency control.
-- `asyncio.Queue` for URL frontier.
-- Playwright browser pool: `asyncio.Semaphore(3)` to limit concurrent browser contexts.
+**Primary: Crawlee's `AutoscaledPool` (asyncio, single process)**
+- Crawlee manages the event loop, concurrency, and backpressure.
+- `AutoscaledPool` monitors CPU + memory via `Snapshotter` and dynamically adjusts concurrency.
+- `min_concurrency` / `max_concurrency` bounds set in config (e.g., 1–10).
+- `max_tasks_per_minute` caps global throughput.
+- Playwright browser pool: configured via `max_open_pages` (e.g., 3).
 
-**Why not threads?**
-- asyncio handles thousands of concurrent I/O ops with less overhead.
-- No GIL contention for I/O-bound work.
+**Per-domain concurrency (ours):**
+- Thin `asyncio.Semaphore(1)` + configurable delay per domain.
+- Called at the top of each request handler, before processing.
 
-**Why not multiprocessing / Celery (yet)?**
-- Overkill for single-machine MVP. Adds deployment complexity.
-- Architecture supports it later: frontier becomes Redis queue, fetchers become Celery workers.
+**Why Crawlee over manual asyncio?**
+- We get persistent queue, auto-resume, autoscaling, retry, robots.txt, session management, and fingerprinting for free.
+- We still write plain `async def` handlers — no framework lock-in beyond the callback signature.
 
-**CPU-bound work (OCR, PDF parsing) runs in a thread pool:**
+**CPU-bound work (local PDF parsing fallback) runs in a thread pool:**
 ```python
 text = await asyncio.get_event_loop().run_in_executor(
     thread_pool, pdfplumber_extract, pdf_bytes
@@ -860,9 +854,10 @@ text = await asyncio.get_event_loop().run_in_executor(
 - [ ] Project scaffolding: pyproject.toml, package structure, CI skeleton
 - [ ] Config loading (YAML) with pydantic validation
 - [ ] CLI: `collect --plan-file`, `list-runs`, `report`
-- [ ] URL frontier with priority queue
-- [ ] Politeness engine: robots.txt fetching + per-domain rate limiting
-- [ ] httpx async fetcher with retry logic
+- [ ] Crawlee `AdaptivePlaywrightCrawler` setup + configuration module
+- [ ] Crawlee request handler with link following + scope filtering
+- [ ] Per-domain rate limiter (thin asyncio wrapper on top of Crawlee)
+- [ ] Streaming file downloader for PDFs/DOCX (httpx)
 - [ ] HTML extractor (readability-lxml)
 - [ ] PDF extractor (Mistral OCR API primary, pdfplumber local fallback)
 - [ ] Link extraction + URL normalization
@@ -871,27 +866,25 @@ text = await asyncio.get_event_loop().run_in_executor(
 - [ ] Filesystem raw file storage (content-addressed)
 - [ ] JSONL export
 - [ ] Structured logging (structlog)
-- [ ] Checkpoint/resume for interrupted crawls
 - [ ] Basic run report (JSON)
-- [ ] Unit tests for all extractors, dedup, URL normalization
+- [ ] Unit tests for all extractors, dedup, URL normalization, per-domain rate limiter
 - [ ] Integration test: crawl a local test server
 
 **Acceptance criteria:**
 - Can crawl a 100-page static site from a YAML plan file, extract text from HTML + PDF, store results, and export as JSONL.
-- Respects robots.txt and rate limits.
-- Can resume after simulated interruption.
+- Respects robots.txt (Crawlee built-in) and per-domain rate limits (our wrapper).
+- Can resume after simulated interruption (Crawlee persistent RequestQueue).
 - All unit tests pass.
 
 ### Milestone 2: V1 Production (Weeks 4–7)
 
-**Scope:** Add LLM interpretation, Playwright, more extractors, adapters, and production hardening.
+**Scope:** Add LLM interpretation, more extractors, adapters, and production hardening. Playwright already works via Crawlee's AdaptivePlaywrightCrawler from MVP.
 
 **Deliverables:**
 - [ ] LLM query interpreter (CrawlPlan generation from natural language)
 - [ ] Crawl plan approval step (interactive CLI prompt)
-- [ ] Source discovery: sitemap parsing, search engine queries
-- [ ] Playwright browser pool for JS-rendered pages
-- [ ] Auto-detection: httpx vs Playwright
+- [ ] Source discovery: sitemap parsing (Crawlee's `SitemapRequestLoader`), search engine queries
+- [ ] Custom `result_checker` for AdaptivePlaywrightCrawler (tune rendering decisions)
 - [ ] DOCX extractor
 - [ ] Scanned PDF handling already covered by Mistral OCR (verify quality on scanned corpus)
 - [ ] SimHash near-duplicate detection
@@ -908,7 +901,7 @@ text = await asyncio.get_event_loop().run_in_executor(
 **Acceptance criteria:**
 - Can execute `webcollector collect "Download all 10-K filings for Tesla 2020-2025"` end-to-end.
 - LLM generates valid CrawlPlan; user can review before execution.
-- Handles JS-rendered pages without user intervention.
+- Crawlee auto-handles JS-rendered pages without user intervention.
 - Deduplication reduces stored documents by >10% on sites with syndicated content.
 - Incremental re-run skips unchanged documents.
 
@@ -947,14 +940,14 @@ text = await asyncio.get_event_loop().run_in_executor(
 | `html_extractor` | Readability extraction, link extraction, encoding handling, malformed HTML |
 | `pdf_extractor` | Text extraction, empty PDF handling, encrypted PDF detection |
 | `simhash` | Identical docs → distance 0, near-dupes → distance ≤3, different docs → distance >3 |
-| `politeness` | Rate limiter timing, robots.txt parsing, Crawl-delay respect |
-| `frontier` | Priority ordering, dedup on add, serialization/deserialization |
+| `rate_limiter` | Per-domain semaphore timing, delay enforcement, concurrent domain access |
+| `crawl.handlers` | Link scope filtering, attachment URL detection, enqueue logic |
 | `config` | Default merging, env var interpolation, validation errors |
 | `crawl_plan` | LLM output parsing, malformed JSON handling, field validation |
 
 ### J.2 Integration Tests
 
-- **Local test server:** Spin up a `aiohttp` test server with known pages, PDFs, and link structure. Validate end-to-end crawl produces expected documents.
+- **Local test server:** Spin up a test server (e.g., `aiohttp`) with known pages, PDFs, and link structure. Run Crawlee's `AdaptivePlaywrightCrawler` against it. Validate end-to-end crawl produces expected documents.
 - **Recorded fixtures:** Use `pytest-recording` (VCR.py) to record real HTTP interactions, replay in CI without hitting real sites.
 - **Database round-trip:** Store documents, query them, export them, validate integrity.
 
@@ -1075,11 +1068,12 @@ Files:            ./data/runs/abc-123/
 | 7 | **Storage grows unbounded** | Disk full, performance degradation | Medium | Configurable `max_pages` cap; content-addressed dedup; storage usage in run reports; cleanup CLI command. |
 | 8 | **LLM/OCR API unavailable or rate-limited** | Cannot generate crawl plans; PDF extraction degrades | Low | Fallback to manual plan files for LLM; pdfplumber fallback for PDF extraction; cache recent plans; support local models via Ollama. |
 | 9 | **Encoding issues corrupt text** | Mojibake, lost characters | Medium | Detect encoding via `charset_normalizer`; store raw bytes alongside text; log encoding mismatches. |
-| 10 | **Checkpoint corruption loses crawl progress** | Must restart long crawls from scratch | Low | Write checkpoints atomically (write-then-rename); keep last 3 checkpoints; validate on load. |
+| 10 | **Crawlee storage corruption loses crawl progress** | Must restart long crawls from scratch | Low | Crawlee's persistent `RequestQueue` handles this; we additionally snapshot our `CrawlRun` metadata to DB periodically. |
 | 11 | **Scope creep: crawler follows links outside target** | Fetches irrelevant pages, wastes resources | Medium | Strict URL pattern matching; domain allowlist; depth limit; LLM relevance check (V2). |
-| 12 | **Concurrency bugs in async code** | Data races, deadlocks, corrupted state | Medium | Single-writer pattern for DB and frontier; thorough async integration tests; `asyncio` debug mode in development. |
+| 12 | **Concurrency bugs in async code** | Data races, deadlocks, corrupted state | Low | Crawlee manages the event loop and concurrency; single-writer pattern for our DB; `asyncio` debug mode in development. Risk reduced vs custom implementation. |
 | 13 | **Dependency vulnerabilities** | Security exposure | Low | Dependabot / `pip-audit` in CI; pin dependency versions; minimal dependency surface. |
-| 14 | **Playwright resource leaks** | Memory growth, zombie browser processes | Medium | Browser pool with explicit lifecycle management; timeout-based kill; resource monitoring in logs. |
+| 14 | **Playwright resource leaks** | Memory growth, zombie browser processes | Low | Crawlee manages browser pool lifecycle, retiring contexts after N requests. We monitor via Crawlee's `Snapshotter` metrics. Risk reduced vs manual pool management. |
+| 15 | **Crawlee framework dependency** | Breaking changes in Crawlee API, or Crawlee project stalls | Low | Pin Crawlee version; Crawlee follows semver since v1.0. Active development (v1.4, Feb 2026). Our code is isolated in `crawl/` module — could swap out with bounded effort if needed. |
 
 ---
 
