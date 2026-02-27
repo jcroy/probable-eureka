@@ -60,6 +60,17 @@ class CrawlHandlers:
             (re.compile(js.url_pattern), js) for js in plan.js_interactions
         ]
         self._pages_crawled = 0
+        # Pagination link following state
+        pagination = plan.pagination
+        self._next_selector: str | None = (
+            pagination.next_selector
+            if pagination and pagination.strategy == "next_selector"
+            else None
+        )
+        self._next_pages_followed = 0
+        self._next_selector_max = (
+            pagination.max_pages if pagination and pagination.max_pages else 1000
+        )
 
     @property
     def pages_crawled(self) -> int:
@@ -107,6 +118,9 @@ class CrawlHandlers:
 
         # Discover and enqueue links within scope
         await self._enqueue_scoped_links(context, soup=soup)
+
+        # Follow pagination links (next page)
+        await self._enqueue_pagination_links(context, soup=soup)
 
         # Find and download document attachments (PDFs, DOCX, etc.)
         await self._download_attachments(context, soup=soup)
@@ -203,6 +217,73 @@ class CrawlHandlers:
             ]
             await context.add_requests(requests)
             logger.debug("links_enqueued", count=len(requests), from_url=base_url)
+
+    async def _enqueue_pagination_links(
+        self, context: AdaptivePlaywrightCrawlingContext, soup=None
+    ) -> None:
+        """Find and enqueue "next page" links using multiple strategies."""
+        if self._next_pages_followed >= self._next_selector_max:
+            return
+
+        if soup is None:
+            soup = getattr(context, "soup", None)
+        if not soup:
+            return
+
+        base_url = context.request.url
+        next_url: str | None = None
+
+        # Strategy 1: Explicit next_selector from pagination rule
+        if self._next_selector:
+            tag = soup.select_one(self._next_selector)
+            if tag and tag.get("href"):
+                next_url = resolve_url(base_url, tag["href"])
+
+        # Strategy 2: Auto-detect <link rel="next"> and <a rel="next">
+        if not next_url:
+            for tag_name in ("link", "a"):
+                tag = soup.find(tag_name, rel="next")
+                if tag and tag.get("href"):
+                    next_url = resolve_url(base_url, tag["href"])
+                    break
+
+        # Strategy 3: Heuristic CSS selectors for common pagination patterns
+        if not next_url:
+            heuristic_selectors = [
+                'a[aria-label="Next"]',
+                ".pagination .next a",
+                ".pagination a.next",
+                "a.pagination-next",
+                "li.next a",
+            ]
+            for sel in heuristic_selectors:
+                tag = soup.select_one(sel)
+                if tag and tag.get("href"):
+                    href = tag["href"]
+                    if href and not href.startswith(("#", "javascript:")):
+                        next_url = resolve_url(base_url, href)
+                        break
+
+        if not next_url:
+            return
+
+        # Scope check
+        if not self._is_in_scope(next_url):
+            logger.debug("pagination_link_out_of_scope", url=next_url)
+            return
+
+        from crawlee import Request
+
+        self._next_pages_followed += 1
+        logger.info(
+            "pagination_next_page",
+            url=next_url,
+            page_num=self._next_pages_followed,
+            from_url=base_url,
+        )
+        await context.add_requests(
+            [Request.from_url(next_url, user_data={"depth": 0})]
+        )
 
     async def _download_attachments(
         self, context: AdaptivePlaywrightCrawlingContext, soup=None

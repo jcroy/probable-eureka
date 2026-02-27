@@ -127,6 +127,27 @@ class CrawlRunner:
             playwright_crawler_specific_kwargs=self._build_playwright_kwargs(),
         )
 
+    def _expand_pagination_seeds(self) -> list[str]:
+        """Generate additional seed URLs from url_parameter pagination rules."""
+        pagination = self._plan.pagination
+        if not pagination or pagination.strategy != "url_parameter":
+            return []
+
+        template = pagination.url_template
+        if not template or "{offset}" not in template:
+            logger.warning(
+                "pagination_template_missing_placeholder",
+                template=template,
+            )
+            return []
+
+        urls = []
+        for offset in range(
+            pagination.param_start, pagination.param_max + 1, pagination.param_step
+        ):
+            urls.append(template.format(offset=offset))
+        return urls
+
     async def run(self) -> CrawlResult:
         """Execute the crawl.
 
@@ -159,9 +180,19 @@ class CrawlRunner:
 
         rendering_mode = self._config.browser.rendering_mode
 
+        # Combine plan seed URLs with pagination-expanded URLs (deduped, order-preserving)
+        pagination_urls = self._expand_pagination_seeds()
+        seen: set[str] = set()
+        all_seed_urls: list[str] = []
+        for url in [*self._plan.seed_urls, *pagination_urls]:
+            if url not in seen:
+                seen.add(url)
+                all_seed_urls.append(url)
+
         logger.info(
             "crawler_starting",
-            seed_urls=len(self._plan.seed_urls),
+            seed_urls=len(all_seed_urls),
+            pagination_urls=len(pagination_urls),
             max_requests=max_requests,
             max_depth=max_depth,
             max_concurrency=self._config.crawl.max_concurrency,
@@ -185,7 +216,7 @@ class CrawlRunner:
         # Build seed requests
         seed_requests = [
             Request.from_url(url, user_data={"depth": 0})
-            for url in self._plan.seed_urls
+            for url in all_seed_urls
         ]
 
         try:
