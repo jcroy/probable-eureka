@@ -13,6 +13,7 @@ crawl:
   default_rate_limit_rps: 1.0
   max_retries: 3
   max_concurrency: 10
+  respect_robots_txt: false
 
 browser:
   playwright_pool_size: 3

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class LLMConfig(BaseModel):
@@ -41,13 +41,6 @@ class CrawlConfig(BaseModel):
     respect_robots_txt: bool = True
     user_agent: str = "webcollector/0.1 (+https://github.com/yourorg/webcollector)"
     domain_overrides: dict[str, DomainOverride] = Field(default_factory=dict)
-
-    @field_validator("respect_robots_txt")
-    @classmethod
-    def robots_txt_must_be_true(cls, v: bool) -> bool:
-        if not v:
-            raise ValueError("respect_robots_txt cannot be set to false")
-        return v
 
 
 class BrowserConfig(BaseModel):

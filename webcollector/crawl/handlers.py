@@ -30,6 +30,30 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
+def _safe_compile_patterns(patterns: list[str]) -> list[re.Pattern]:
+    """Compile regex patterns, skipping any that are invalid."""
+    compiled: list[re.Pattern] = []
+    for p in patterns:
+        try:
+            compiled.append(re.compile(p))
+        except re.error:
+            # LLM sometimes emits glob-style patterns — treat as literal
+            compiled.append(re.compile(re.escape(p)))
+            logger.warning("invalid_regex_escaped", pattern=p)
+    return compiled
+
+
+def _safe_compile_js(
+    js: JsInteraction,
+) -> tuple[re.Pattern, JsInteraction] | None:
+    """Compile a JsInteraction's url_pattern, returning None on failure."""
+    try:
+        return (re.compile(js.url_pattern), js)
+    except re.error:
+        logger.warning("invalid_js_url_pattern", pattern=js.url_pattern)
+        return None
+
+
 class CrawlHandlers:
     """Encapsulates the request handler logic for a single crawl run.
 
@@ -50,14 +74,12 @@ class CrawlHandlers:
         self._downloader = downloader
         self._on_page_crawled = on_page_crawled
         self._on_file_downloaded = on_file_downloaded
-        self._include_patterns = (
-            [re.compile(p) for p in plan.url_patterns] if plan.url_patterns else []
-        )
-        self._exclude_patterns = (
-            [re.compile(p) for p in plan.exclude_patterns] if plan.exclude_patterns else []
-        )
+        self._include_patterns = _safe_compile_patterns(plan.url_patterns)
+        self._exclude_patterns = _safe_compile_patterns(plan.exclude_patterns)
         self._js_interactions: list[tuple[re.Pattern, JsInteraction]] = [
-            (re.compile(js.url_pattern), js) for js in plan.js_interactions
+            compiled
+            for js in plan.js_interactions
+            if (compiled := _safe_compile_js(js)) is not None
         ]
         self._pages_crawled = 0
         # Pagination link following state
@@ -95,12 +117,23 @@ class CrawlHandlers:
         # Get HTML content — works for both httpx (soup) and Playwright (page) paths
         html, soup = await self._get_page_content(context)
         http_response = getattr(context, "http_response", None)
+        status_code = http_response.status_code if http_response else 200
+
+        # If the page returned 403, the site likely blocks spoofed browser UAs.
+        # Retry with a plain httpx request using an honest tool UA — many sites
+        # (e.g. SEC.gov) allow simple declared automated tools but block
+        # headless browsers.
+        if status_code == 403:
+            html, soup, status_code = await self._refetch_with_honest_ua(url)
+            if status_code == 403:
+                logger.warning("page_blocked_403", url=url)
+                return
 
         # Build page data for downstream processing
         page_data = {
             "url": url,
             "canonical_url": normalize_url(url),
-            "status_code": http_response.status_code if http_response else 200,
+            "status_code": status_code,
             "content_type": (
                 http_response.headers.get("content-type", "text/html")
                 if http_response
@@ -124,6 +157,35 @@ class CrawlHandlers:
 
         # Find and download document attachments (PDFs, DOCX, etc.)
         await self._download_attachments(context, soup=soup)
+
+    async def _refetch_with_honest_ua(self, url: str):
+        """Re-fetch a URL with a plain httpx request and honest UA.
+
+        Sites like SEC.gov block browser-spoofed user agents but allow simple
+        declared automated tools.  This is the last-resort fallback when both
+        Crawlee's httpx path and Playwright path return 403.
+        """
+        import httpx
+        from bs4 import BeautifulSoup
+
+        honest_ua = "webcollector/1.0 (research tool)"
+        try:
+            async with httpx.AsyncClient(
+                timeout=30,
+                headers={"User-Agent": honest_ua},
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200 and "html" in resp.headers.get(
+                    "content-type", ""
+                ):
+                    soup = BeautifulSoup(resp.text, "lxml")
+                    logger.info("refetch_honest_ua_ok", url=url)
+                    return resp.text, soup, 200
+                return "", None, resp.status_code
+        except httpx.HTTPError as exc:
+            logger.warning("refetch_honest_ua_failed", url=url, error=str(exc))
+            return "", None, 403
 
     async def _get_page_content(self, context):
         """Extract HTML and BeautifulSoup from either httpx or Playwright context."""

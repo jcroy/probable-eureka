@@ -20,13 +20,15 @@ _MAX_TEXT_CHARS = 16_000
 _MAX_LINKS = 120
 _MAX_INTERACTIVE_ELEMENTS = 80
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-}
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+# Honest UA for sites like SEC.gov that block spoofed browser strings
+_TOOL_UA = "webcollector/1.0 (research tool)"
+
+_HEADERS = {"User-Agent": _BROWSER_UA}
 
 # ---------------------------------------------------------------------------
 # Web search
@@ -180,6 +182,13 @@ async def execute_fetch_page(url: str, extract_links: bool = True) -> str:
             timeout=_HTTP_TIMEOUT, headers=_HEADERS, follow_redirects=True
         ) as client:
             resp = await client.get(url)
+            # Some sites (e.g. SEC.gov) block browser-spoofed UAs from
+            # non-browser clients.  Retry with an honest tool UA.
+            if resp.status_code == 403:
+                logger.debug("fetch_403_retrying_with_tool_ua", url=url)
+                resp = await client.get(
+                    url, headers={"User-Agent": _TOOL_UA}
+                )
             resp.raise_for_status()
     except httpx.HTTPError as exc:
         return f"Fetch failed: {exc}"
@@ -257,7 +266,8 @@ _INTERACTIVE_JS = """
     function _bestDataAttr(dataAttrs, tag) {
         if (!dataAttrs) return null;
         for (const key of _PREFERRED_DATA) {
-            if (dataAttrs[key]) return tag + '[' + key + '="' + dataAttrs[key].replace(/"/g, '\\\\"') + '"]';
+            if (dataAttrs[key]) return tag + '[' + key + '="'
+                + dataAttrs[key].replace(/"/g, '\\\\"') + '"]';
         }
         for (const [k, v] of Object.entries(dataAttrs)) {
             if (v) return tag + '[' + k + '="' + v.replace(/"/g, '\\\\"') + '"]';

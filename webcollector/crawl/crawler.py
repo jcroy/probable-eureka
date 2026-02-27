@@ -109,6 +109,9 @@ class CrawlRunner:
             "concurrency_settings": concurrency,
             "request_handler_timeout": timedelta(minutes=5),
             "configuration": crawlee_config,
+            # Don't let Crawlee kill sessions on 403 — our handler retries
+            # with an honest UA for sites that block browser-spoofed requests.
+            "ignore_http_error_status_codes": [403],
         }
 
         if rendering_mode == "http_only":
@@ -174,9 +177,21 @@ class CrawlRunner:
         crawlee_config = self._build_crawlee_config()
         concurrency = self._build_concurrency_settings()
 
-        # Use max_pages from plan (override) or config (default)
-        max_requests = self._plan.max_pages or self._config.crawl.max_pages
-        max_depth = self._plan.max_depth or self._config.crawl.max_depth
+        # Config takes precedence (CLI --max-pages sets config), then plan, then default
+        config_max_pages = self._config.crawl.max_pages
+        config_max_depth = self._config.crawl.max_depth
+        plan_max_pages = self._plan.max_pages
+        plan_max_depth = self._plan.max_depth
+
+        # Use the smaller of config and plan values (CLI flag = hard cap)
+        max_requests = min(
+            config_max_pages,
+            plan_max_pages if plan_max_pages else config_max_pages,
+        )
+        max_depth = min(
+            config_max_depth,
+            plan_max_depth if plan_max_depth else config_max_depth,
+        )
 
         rendering_mode = self._config.browser.rendering_mode
 

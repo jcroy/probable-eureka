@@ -590,7 +590,7 @@ crawl:
   max_retries: 3                  # Crawlee retry count
   max_concurrency: 10             # Crawlee AutoscaledPool upper bound
   min_concurrency: 1
-  respect_robots_txt: true        # Cannot be set to false (Crawlee flag)
+  respect_robots_txt: true        # Set to false to ignore robots.txt
   user_agent: "webcollector/0.1 (+https://github.com/yourorg/webcollector)"
 
   # Per-domain overrides
