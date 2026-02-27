@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
     from webcollector.config import WebCollectorConfig
     from webcollector.models.crawl_plan import CrawlPlan
+    from webcollector.profiles.escalation import EscalationManager
+    from webcollector.profiles.matcher import ProfileMatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -37,12 +39,16 @@ class CrawlRunner:
         run_dir: Path,
         on_page_crawled: Callable | None = None,
         on_file_downloaded: Callable | None = None,
+        profile_matcher: ProfileMatcher | None = None,
+        escalation_manager: EscalationManager | None = None,
     ) -> None:
         self._config = config
         self._plan = plan
         self._run_dir = run_dir
         self._on_page_crawled = on_page_crawled
         self._on_file_downloaded = on_file_downloaded
+        self._profile_matcher = profile_matcher
+        self._escalation_manager = escalation_manager
         self._handlers: CrawlHandlers | None = None
         self._downloader: FileDownloader | None = None
 
@@ -172,6 +178,8 @@ class CrawlRunner:
             downloader=self._downloader,
             on_page_crawled=self._on_page_crawled,
             on_file_downloaded=self._on_file_downloaded,
+            profile_matcher=self._profile_matcher,
+            escalation_manager=self._escalation_manager,
         )
 
         crawlee_config = self._build_crawlee_config()

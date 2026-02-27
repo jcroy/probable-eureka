@@ -2,6 +2,8 @@
 
 These handlers are called by Crawlee's AdaptivePlaywrightCrawler for each URL.
 They perform: rate limiting, content extraction, link discovery, and file downloads.
+When a page yields low content, the profile system is consulted for site-specific
+navigation hints, and may escalate to the LLM for unknown site types.
 """
 
 from __future__ import annotations
@@ -26,6 +28,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from crawlee.crawlers import AdaptivePlaywrightCrawlingContext
+
+    from webcollector.profiles.escalation import EscalationManager
+    from webcollector.profiles.matcher import ProfileMatcher
+    from webcollector.profiles.models import SiteProfile
 
 logger = structlog.get_logger(__name__)
 
@@ -68,12 +74,16 @@ class CrawlHandlers:
         downloader: FileDownloader,
         on_page_crawled: Callable | None = None,
         on_file_downloaded: Callable | None = None,
+        profile_matcher: ProfileMatcher | None = None,
+        escalation_manager: EscalationManager | None = None,
     ) -> None:
         self._plan = plan
         self._rate_limiter = rate_limiter
         self._downloader = downloader
         self._on_page_crawled = on_page_crawled
         self._on_file_downloaded = on_file_downloaded
+        self._profile_matcher = profile_matcher
+        self._escalation_manager = escalation_manager
         self._include_patterns = _safe_compile_patterns(plan.url_patterns)
         self._exclude_patterns = _safe_compile_patterns(plan.exclude_patterns)
         self._js_interactions: list[tuple[re.Pattern, JsInteraction]] = [
@@ -82,6 +92,8 @@ class CrawlHandlers:
             if (compiled := _safe_compile_js(js)) is not None
         ]
         self._pages_crawled = 0
+        # Track domains where we've already checked/escalated profiles
+        self._profiled_domains: dict[str, SiteProfile | None] = {}
         # Pagination link following state
         pagination = plan.pagination
         self._next_selector: str | None = (
@@ -128,6 +140,12 @@ class CrawlHandlers:
             if status_code == 403:
                 logger.warning("page_blocked_403", url=url)
                 return
+
+        # Check profiles on: first page of each domain, thin content, or errors
+        domain = get_domain(url)
+        first_for_domain = domain not in self._profiled_domains
+        if first_for_domain or len(html) < 500 or status_code == 403:
+            await self._check_profile(url, html, status_code)
 
         # Build page data for downstream processing
         page_data = {
@@ -415,6 +433,84 @@ class CrawlHandlers:
                 return True
 
         return True  # If we can't determine type from URL, allow it
+
+    async def _check_profile(self, url: str, html: str, status_code: int) -> None:
+        """Check if a profile matches this page and apply navigation hints.
+
+        Called when a page yields low content (< 200 chars of text).  Tries:
+        1. Look up a matching profile from the profile store
+        2. If no match, escalate to Haiku to generate a new profile
+        3. Apply any discovered navigation hints (JS interactions, selectors)
+
+        Results are cached per-domain so we only check/escalate once per site.
+        """
+        if not self._profile_matcher:
+            return
+
+        domain = get_domain(url)
+
+        # Already checked this domain
+        if domain in self._profiled_domains:
+            return
+
+        from webcollector.profiles.matcher import extract_signals
+
+        signals = extract_signals(url, html)
+        profile = self._profile_matcher.match(signals)
+
+        # If no match, try LLM escalation
+        if profile is None and self._escalation_manager:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(html[:50_000], "lxml")
+            text = soup.get_text(separator=" ", strip=True)
+
+            profile = await self._escalation_manager.escalate(
+                signals=signals,
+                failure_reason=(
+                    "empty_content" if len(text) < 200
+                    else "low_content_quality"
+                ),
+                status_code=status_code,
+                content_length=len(text),
+                html_snippet=html[:5000],
+            )
+
+        self._profiled_domains[domain] = profile
+
+        if profile:
+            self._apply_profile_hints(profile)
+
+    def _apply_profile_hints(self, profile: SiteProfile) -> None:
+        """Merge a profile's navigation hints into the current handler state."""
+        nav = profile.navigation
+
+        # Add JS interactions from the profile (avoid duplicates)
+        for hint in nav.js_interactions:
+            js = JsInteraction(
+                url_pattern=".*",  # apply to all pages of this site
+                steps=[
+                    {
+                        "action": hint.action,
+                        "selector": hint.selector,
+                        "timeout_ms": hint.timeout_ms,
+                    }
+                ],
+            )
+            compiled = _safe_compile_js(js)
+            if compiled:
+                self._js_interactions.append(compiled)
+
+        # Add pagination selectors if we don't already have one
+        if not self._next_selector and nav.pagination_selectors:
+            self._next_selector = nav.pagination_selectors[0]
+
+        logger.info(
+            "profile_hints_applied",
+            profile=profile.name,
+            js_interactions=len(nav.js_interactions),
+            pagination=bool(nav.pagination_selectors),
+        )
 
 
 def make_result_checker(min_text_length: int = 200):

@@ -45,10 +45,12 @@ class RunOrchestrator:
         config: WebCollectorConfig,
         plan: CrawlPlan,
         prompt: str = "",
+        enable_profiles: bool = True,
     ) -> None:
         self._config = config
         self._plan = plan
         self._prompt = prompt
+        self._enable_profiles = enable_profiles
         self._run_id = str(uuid4())
         self._db: Database | None = None
         self._html_extractor = HTMLExtractor()
@@ -92,6 +94,12 @@ class RunOrchestrator:
         logger.info("run_started", run_id=self._run_id, prompt=self._prompt[:100])
 
         try:
+            # Set up profile system (matcher + escalation)
+            profile_matcher = None
+            escalation_manager = None
+            if self._enable_profiles:
+                profile_matcher, escalation_manager = self._build_profile_system()
+
             # Run the crawler
             crawler = CrawlRunner(
                 config=self._config,
@@ -99,6 +107,8 @@ class RunOrchestrator:
                 run_dir=run_dir,
                 on_page_crawled=self._on_page_crawled,
                 on_file_downloaded=self._on_file_downloaded,
+                profile_matcher=profile_matcher,
+                escalation_manager=escalation_manager,
             )
 
             crawl_result = await crawler.run()
@@ -334,6 +344,25 @@ class RunOrchestrator:
         if self._plan.date_range_end and pub_date > self._plan.date_range_end:
             return False
         return True
+
+    def _build_profile_system(self):
+        """Set up the profile matcher and escalation manager."""
+        from webcollector.profiles.escalation import EscalationManager
+        from webcollector.profiles.matcher import ProfileMatcher
+        from webcollector.profiles.store import ProfileStore
+
+        store = ProfileStore()
+        store.load_all()
+        matcher = ProfileMatcher(store)
+
+        escalation = None
+        if self._config.llm.api_key:
+            escalation = EscalationManager(
+                llm_config=self._config.llm,
+                profile_store=store,
+            )
+
+        return matcher, escalation
 
     def _get_run_dir(self) -> Path:
         """Get the directory for this run's data."""

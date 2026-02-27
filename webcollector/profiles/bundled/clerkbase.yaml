@@ -1,0 +1,47 @@
+name: clerkbase
+description: >
+  Clerkbase/ClerksHQ platform used by US municipalities for publishing meeting
+  minutes, agendas, and ordinances. Uses jstree folder navigation and serves
+  content as plain .htm files with dates encoded in filenames.
+version: 1
+
+fingerprint:
+  meta_generators: []
+  script_patterns:
+    - "jquery.jstree"
+    - "jstree"
+  body_class_patterns: []
+  url_patterns:
+    - "/Content/.*\\.htm$"
+    - "clerkshq\\.com"
+  css_selectors:
+    - "div.jstree"
+    - "#ClerkBaseTree"
+  min_confidence: 1
+
+navigation:
+  rendering_mode: playwright_only
+  js_interactions:
+    - action: wait_for_selector
+      selector: "div.jstree"
+      timeout_ms: 5000
+    - action: click_all
+      selector: ".jstree-closed > .jstree-icon"
+      timeout_ms: 3000
+  listing_selectors:
+    - ".jstree-leaf a"
+  needs_js_for_links: true
+  date_url_pattern: "{mon}{dd}_{yy}"
+
+content:
+  content_selector: "body"
+  title_selector: "title"
+  date_url_regex: "([a-z]{3})(\\d{1,2})_(\\d{2})"
+  remove_selectors: []
+  has_attachments: false
+
+notes: >
+  Clerkbase URLs encode dates in filenames like nov24_25tc.htm (November 24, 2025).
+  The jstree folder navigation requires Playwright to expand folders and discover
+  content links. Minutes text often contains prose dates like "the 8th day of
+  September 2025" which serve as a secondary date signal.
