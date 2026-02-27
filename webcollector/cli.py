@@ -9,8 +9,12 @@ from pathlib import Path
 
 import click
 import structlog
+from dotenv import load_dotenv
 
 from webcollector.config import load_config
+
+# Auto-load .env file so API keys are available without manual sourcing
+load_dotenv()
 
 logger = structlog.get_logger(__name__)
 
@@ -89,9 +93,14 @@ def collect(
             f"depth={plan.max_depth}, domains={plan.target_domains}"
         )
     elif prompt:
+        from webcollector.interpreter.prompt_interpreter import interpret_prompt
+
         click.echo(f"Prompt: {prompt}")
-        click.echo("LLM interpretation not yet implemented. Use --plan-file for MVP.")
-        sys.exit(1)
+        click.echo("Generating crawl plan...")
+        try:
+            plan = asyncio.run(interpret_prompt(prompt, config.llm))
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
     else:
         sys.exit(1)
 
@@ -106,6 +115,8 @@ def collect(
             click.echo(f"  URL patterns: {plan.url_patterns}")
         if plan.document_types:
             click.echo(f"  Document types: {plan.document_types}")
+        if plan.js_interactions:
+            click.echo(f"  JS interactions: {len(plan.js_interactions)} pattern(s)")
         click.echo("")
 
         if not click.confirm("Proceed with this crawl plan?"):

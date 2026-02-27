@@ -13,7 +13,7 @@ import structlog
 
 from webcollector.crawl.downloader import FileDownloader
 from webcollector.crawl.rate_limiter import DomainRateLimiter
-from webcollector.models.crawl_plan import CrawlPlan
+from webcollector.models.crawl_plan import CrawlPlan, JsInteraction
 from webcollector.utils.url_utils import (
     get_domain,
     is_document_url,
@@ -56,6 +56,9 @@ class CrawlHandlers:
         self._exclude_patterns = (
             [re.compile(p) for p in plan.exclude_patterns] if plan.exclude_patterns else []
         )
+        self._js_interactions: list[tuple[re.Pattern, JsInteraction]] = [
+            (re.compile(js.url_pattern), js) for js in plan.js_interactions
+        ]
         self._pages_crawled = 0
 
     @property
@@ -120,11 +123,45 @@ class CrawlHandlers:
         # Playwright path — context has .page
         page = getattr(context, "page", None)
         if page is not None:
+            url = context.request.url
+            await self._run_js_interactions(page, url)
             html = await page.content()
             soup = BeautifulSoup(html, "lxml")
             return html, soup
 
         return "", None
+
+    async def _run_js_interactions(self, page, url: str) -> None:
+        """Execute JS interaction steps for pages matching url_pattern."""
+        for pattern, js_interaction in self._js_interactions:
+            if not pattern.search(url):
+                continue
+
+            logger.info("running_js_interactions", url=url, pattern=js_interaction.url_pattern)
+
+            for step in js_interaction.steps:
+                try:
+                    if step.action == "click" and step.selector:
+                        await page.click(step.selector, timeout=step.timeout_ms)
+                    elif step.action == "click_all" and step.selector:
+                        elements = await page.query_selector_all(step.selector)
+                        for el in elements:
+                            await el.click()
+                    elif step.action == "wait_for_selector" and step.selector:
+                        await page.wait_for_selector(step.selector, timeout=step.timeout_ms)
+                    elif step.action == "wait_for_timeout":
+                        await page.wait_for_timeout(step.timeout_ms)
+                    elif step.action == "scroll_to_bottom":
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await page.wait_for_timeout(1000)
+                except Exception as exc:
+                    logger.warning(
+                        "js_interaction_failed",
+                        url=url,
+                        action=step.action,
+                        selector=step.selector,
+                        error=str(exc),
+                    )
 
     async def _enqueue_scoped_links(
         self, context: AdaptivePlaywrightCrawlingContext, soup=None

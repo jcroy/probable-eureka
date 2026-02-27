@@ -7,6 +7,21 @@ from datetime import date
 from pydantic import BaseModel, Field
 
 
+class JsInteractionStep(BaseModel):
+    """A single JS interaction to perform on a page (click, wait, scroll, etc.)."""
+
+    action: str  # click, click_all, wait_for_selector, wait_for_timeout, scroll_to_bottom
+    selector: str | None = None
+    timeout_ms: int = 5000
+
+
+class JsInteraction(BaseModel):
+    """JS interactions to run on pages matching a URL pattern."""
+
+    url_pattern: str  # regex — pages matching this get the interactions
+    steps: list[JsInteractionStep]
+
+
 class CrawlPlan(BaseModel):
     """Structured crawl plan generated from a user prompt (by LLM or manual YAML)."""
 
@@ -23,3 +38,4 @@ class CrawlPlan(BaseModel):
     max_pages: int = 1000
     keywords: list[str] = Field(default_factory=list)
     adapter_hint: str | None = None
+    js_interactions: list[JsInteraction] = Field(default_factory=list)

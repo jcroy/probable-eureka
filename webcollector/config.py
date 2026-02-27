@@ -14,8 +14,9 @@ class LLMConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-haiku-4-5-20251001"
     api_key_env: str = "ANTHROPIC_API_KEY"
-    max_tokens: int = 2048
+    max_tokens: int = 4096
     temperature: float = 0.0
+    max_research_turns: int = 15
 
     @property
     def api_key(self) -> str | None:
