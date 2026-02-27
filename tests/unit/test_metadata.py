@@ -48,6 +48,74 @@ class TestExtractMetadata:
         )
         assert meta.language == "en"
 
+    def test_date_from_url_clerkbase(self):
+        """Clerkbase-style URLs like nov24_25tc.htm → 2025-11-24."""
+        meta = extract_metadata(
+            {},
+            text="No date in text.",
+            url="https://clerkshq.com/Content/SouthKingstown-ri/council/2025/nov24_25tc.htm",
+        )
+        assert meta.published_date == date(2025, 11, 24)
+
+    def test_date_from_url_various_months(self):
+        for filename, expected in [
+            ("jan15_26tc.htm", date(2026, 1, 15)),
+            ("sep08_25tc.htm", date(2025, 9, 8)),
+            ("oct27_25tc.htm", date(2025, 10, 27)),
+            ("dec01_24.htm", date(2024, 12, 1)),
+        ]:
+            meta = extract_metadata(
+                {}, text="No date.", url=f"https://example.com/{filename}"
+            )
+            assert meta.published_date == expected, f"Failed for: {filename}"
+
+    def test_url_date_does_not_override_html_meta(self):
+        """HTML meta tag date should take priority over URL date."""
+        meta = extract_metadata(
+            {"published_date": "2026-03-15"},
+            text="",
+            url="https://example.com/nov24_25tc.htm",
+        )
+        assert meta.published_date == date(2026, 3, 15)
+
+    def test_prose_date_in_text(self):
+        """Government minutes style: 'the 8th day of September 2025'."""
+        meta = extract_metadata(
+            {},
+            text="held at the Town Hall on the 8th day of September 2025 at 7:38 PM.",
+        )
+        assert meta.published_date == date(2025, 9, 8)
+
+    def test_prose_date_variations(self):
+        for text, expected in [
+            ("the 1st day of January 2026", date(2026, 1, 1)),
+            ("the 22nd day of February 2025", date(2025, 2, 22)),
+            ("the 3rd day of March 2025", date(2025, 3, 3)),
+            ("the 14 day of October 2025", date(2025, 10, 14)),
+        ]:
+            meta = extract_metadata({}, text=text)
+            assert meta.published_date == expected, f"Failed for: {text}"
+
+    def test_prose_date_preferred_over_generic_regex(self):
+        """Prose date should win over a random earlier date in the text."""
+        text = (
+            "VOTED: that the minutes of August 12, 2025 are accepted.\n"
+            "At a session held on the 8th day of September 2025."
+        )
+        meta = extract_metadata({}, text=text)
+        assert meta.published_date == date(2025, 9, 8)
+
+    def test_url_date_preferred_over_text_dates(self):
+        """URL date should win when text contains misleading dates."""
+        text = (
+            "VOTED: that the minutes of August 12, 2025 are accepted.\n"
+            "At a session held on the 8th day of September 2025."
+        )
+        meta = extract_metadata(
+            {}, text=text, url="https://example.com/sep08_25tc.htm"
+        )
+        assert meta.published_date == date(2025, 9, 8)
+
     def test_to_dict(self):
         meta = DocumentMetadata(
             title="Test",

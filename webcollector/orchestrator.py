@@ -12,7 +12,7 @@ This is the main entry point for executing a crawl. It:
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -149,6 +149,8 @@ class RunOrchestrator:
             duplicates_found=self._stats.duplicates_found,
             files_downloaded=self._stats.files_downloaded,
             errors=self._stats.errors,
+            filtered_by_date=self._stats.filtered_by_date,
+            no_date_detected=self._stats.no_date_detected,
         )
 
     async def _on_page_crawled(self, page_data: dict[str, Any]) -> None:
@@ -160,10 +162,20 @@ class RunOrchestrator:
             # Extract content
             result = self._html_extractor.extract(html, url=url)
             text = result.text
-            meta = extract_metadata(result.metadata, text=text)
+            meta = extract_metadata(result.metadata, text=text, url=url)
 
             if not text.strip():
                 logger.debug("empty_extraction", url=url)
+                return
+
+            # Track pages with no detected date when a date range is active
+            if self._has_date_range() and meta.published_date is None:
+                self._stats.no_date_detected += 1
+
+            # Date range filter
+            if not self._is_in_date_range(meta.published_date):
+                self._stats.filtered_by_date += 1
+                logger.debug("outside_date_range", url=url, date=meta.published_date)
                 return
 
             # Dedup check
@@ -246,6 +258,20 @@ class RunOrchestrator:
                     pdf_result = await self._pdf_extractor.extract_from_file(file_path)
                     extracted_text = pdf_result.text
 
+                    # Date range filter for PDF attachments
+                    if extracted_text and self._has_date_range():
+                        pdf_meta = extract_metadata({}, text=extracted_text)
+                        if pdf_meta.published_date is None:
+                            self._stats.no_date_detected += 1
+                        if not self._is_in_date_range(pdf_meta.published_date):
+                            self._stats.filtered_by_date += 1
+                            logger.debug(
+                                "attachment_outside_date_range",
+                                url=result.url,
+                                date=pdf_meta.published_date,
+                            )
+                            return
+
             # Store as attachment linked to the parent page's document
             # Find the parent document by URL
             parent_doc = await self._db.find_by_canonical_url(
@@ -287,6 +313,28 @@ class RunOrchestrator:
                 "file_processing_failed", url=result.url, exc_info=True
             )
 
+    def _has_date_range(self) -> bool:
+        """Check if the crawl plan has any date range bounds set."""
+        return self._plan.date_range_start is not None or self._plan.date_range_end is not None
+
+    def _is_in_date_range(self, pub_date: date | None) -> bool:
+        """Check whether a document's publication date falls within the plan's date range.
+
+        Returns True (keep the document) when:
+        - No date range is set on the plan
+        - pub_date is None (don't discard pages just because we can't detect the date)
+        - pub_date falls within [date_range_start, date_range_end] (inclusive, either bound optional)
+        """
+        if not self._has_date_range():
+            return True
+        if pub_date is None:
+            return True
+        if self._plan.date_range_start and pub_date < self._plan.date_range_start:
+            return False
+        if self._plan.date_range_end and pub_date > self._plan.date_range_end:
+            return False
+        return True
+
     def _get_run_dir(self) -> Path:
         """Get the directory for this run's data."""
         base = Path(self._config.storage.file_store_path)
@@ -303,6 +351,8 @@ class RunStats:
         self.files_downloaded: int = 0
         self.errors: int = 0
         self.bytes_downloaded: int = 0
+        self.filtered_by_date: int = 0
+        self.no_date_detected: int = 0
 
 
 class RunResult:
@@ -316,6 +366,8 @@ class RunResult:
         duplicates_found: int = 0,
         files_downloaded: int = 0,
         errors: int = 0,
+        filtered_by_date: int = 0,
+        no_date_detected: int = 0,
     ) -> None:
         self.run_id = run_id
         self.pages_crawled = pages_crawled
@@ -323,3 +375,5 @@ class RunResult:
         self.duplicates_found = duplicates_found
         self.files_downloaded = files_downloaded
         self.errors = errors
+        self.filtered_by_date = filtered_by_date
+        self.no_date_detected = no_date_detected

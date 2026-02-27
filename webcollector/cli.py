@@ -141,6 +141,8 @@ def collect(
     click.echo(f"  Documents:  {result.documents_stored}")
     click.echo(f"  Duplicates: {result.duplicates_found}")
     click.echo(f"  Files:      {result.files_downloaded}")
+    if result.filtered_by_date > 0:
+        click.echo(f"  Filtered (date): {result.filtered_by_date}")
     click.echo(f"  Errors:     {result.errors}")
 
 
@@ -186,6 +188,7 @@ def report(ctx: click.Context, run_id: str) -> None:
     """Show report for a crawl run."""
     config = ctx.obj["config"]
 
+    from webcollector.reporting.validation import validate_run
     from webcollector.storage.database import Database
 
     async def _report():
@@ -194,13 +197,17 @@ def report(ctx: click.Context, run_id: str) -> None:
         try:
             run = await db.get_crawl_run(run_id)
             doc_count = 0
+            validation = None
             if run:
                 doc_count = await db.count_documents(run_id)
-            return run, doc_count
+                plan = await db.get_run_plan(run_id)
+                if plan:
+                    validation = await validate_run(db, run_id, plan, run_stats=run)
+            return run, doc_count, validation
         finally:
             await db.close()
 
-    run, doc_count = asyncio.run(_report())
+    run, doc_count, validation = asyncio.run(_report())
 
     if not run:
         click.echo(f"Run {run_id} not found.")
@@ -217,6 +224,54 @@ def report(ctx: click.Context, run_id: str) -> None:
     click.echo(f"  Errors:     {run.get('total_errors', 0)}")
     click.echo(f"  Bytes:      {run.get('total_bytes_downloaded', 0)}")
     click.echo(f"  DB docs:    {doc_count}")
+
+    if validation:
+        _print_validation_report(validation)
+
+
+def _print_validation_report(v) -> None:
+    """Print the validation report section."""
+    click.echo("\n--- Validation Report ---")
+
+    # Date coverage
+    start, end = v.date_range_requested
+    if start or end:
+        click.echo("  Date coverage:")
+        range_str = f"{start or '...'} to {end or '...'}"
+        click.echo(f"    Requested range: {range_str}")
+        total = v.docs_with_date + v.docs_without_date
+        click.echo(f"    Docs with date:     {v.docs_with_date} / {total}")
+        click.echo(f"    Docs without date:  {v.docs_without_date}")
+        if v.docs_outside_range > 0:
+            click.echo(f"    Docs outside range: {v.docs_outside_range}")
+        if v.filtered_by_date > 0:
+            click.echo(f"    Filtered by date:   {v.filtered_by_date}")
+        if v.date_distribution:
+            click.echo("    Date distribution:")
+            for dt, count in v.date_distribution.items():
+                click.echo(f"      {dt}: {count}")
+
+    # Content quality
+    click.echo("  Content quality:")
+    click.echo(f"    Avg text length: {v.avg_text_length:,.0f} chars")
+    if v.short_docs > 0:
+        click.echo(f"    Short docs (<100 chars): {v.short_docs}")
+    if v.docs_without_title > 0:
+        click.echo(f"    Docs without title: {v.docs_without_title}")
+
+    # Domains
+    if v.domain_distribution:
+        click.echo("  Domains:")
+        for domain, count in v.domain_distribution.items():
+            click.echo(f"    {domain}: {count}")
+
+    # Dedup
+    if v.exact_duplicates > 0 or v.near_duplicates > 0:
+        click.echo("  Dedup:")
+        if v.exact_duplicates > 0:
+            click.echo(f"    Exact duplicates skipped: {v.exact_duplicates}")
+        if v.near_duplicates > 0:
+            click.echo(f"    Near-duplicates flagged: {v.near_duplicates}")
 
 
 @cli.command()

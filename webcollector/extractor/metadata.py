@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -36,21 +37,49 @@ _DATE_RE = re.compile(
     r"\b(\w+ \d{1,2},? \d{4})\b"
 )
 
+# Prose date pattern: "the 8th day of September 2025" (common in government minutes)
+_PROSE_DATE_RE = re.compile(
+    r"\bthe\s+(\d{1,2})(?:st|nd|rd|th)?\s+day\s+of\s+(\w+)\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+
+# 3-letter month abbreviations for URL date extraction
+_MONTH_ABBR = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# URL filename date pattern: "nov24_25tc.htm" → Nov 24, 2025
+# Matches: {mon}{dd}_{yy} where mon is 3-letter abbreviation
+_URL_DATE_RE = re.compile(
+    r"([a-z]{3})(\d{1,2})_(\d{2})",
+    re.IGNORECASE,
+)
+
 
 def extract_metadata(
     html_metadata: dict[str, Any],
     text: str = "",
+    url: str = "",
 ) -> DocumentMetadata:
     """Build a DocumentMetadata from HTML-level metadata and text heuristics.
 
-    Priority: HTML meta tags > text-level heuristics.
+    Priority: HTML meta tags > URL-based date > prose date in text > regex date in text.
     """
     title = html_metadata.get("title", "")
     author = html_metadata.get("author")
     language = html_metadata.get("language")
     published_date = _parse_date(html_metadata.get("published_date"))
 
-    # If no date from HTML, try to find one in the text
+    # If no date from HTML meta tags, try the URL
+    if not published_date and url:
+        published_date = _find_date_in_url(url)
+
+    # If no date from URL, try prose pattern in text ("the Nth day of Month Year")
+    if not published_date and text:
+        published_date = _find_prose_date_in_text(text[:2000])
+
+    # If still no date, fall back to generic date regex in text
     if not published_date and text:
         published_date = _find_date_in_text(text[:2000])
 
@@ -81,6 +110,39 @@ def _parse_date(raw: str | None) -> date | None:
             continue
 
     return None
+
+
+def _find_date_in_url(url: str) -> date | None:
+    """Extract a date from URL path components.
+
+    Handles patterns like:
+    - /2025/nov24_25tc.htm → 2025-11-24
+    - /sep08_25tc.htm → 2025-09-08
+    """
+    try:
+        path = urlparse(url).path
+        filename = path.rsplit("/", 1)[-1] if "/" in path else path
+        match = _URL_DATE_RE.search(filename)
+        if not match:
+            return None
+        mon_str, day_str, year_short = match.group(1), match.group(2), match.group(3)
+        month = _MONTH_ABBR.get(mon_str.lower())
+        if not month:
+            return None
+        day = int(day_str)
+        year = 2000 + int(year_short)
+        return date(year, month, day)
+    except (ValueError, IndexError):
+        return None
+
+
+def _find_prose_date_in_text(text: str) -> date | None:
+    """Find prose dates like 'the 8th day of September 2025' in text."""
+    match = _PROSE_DATE_RE.search(text)
+    if not match:
+        return None
+    day_str, month_str, year_str = match.group(1), match.group(2), match.group(3)
+    return _parse_date(f"{day_str} {month_str} {year_str}")
 
 
 def _find_date_in_text(text: str) -> date | None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import date
 from unittest.mock import AsyncMock
 
 import pytest
@@ -49,6 +50,16 @@ def _make_html(title: str, body: str) -> str:
     return (
         f"<html><head><title>{title}</title></head>"
         f"<body><article><p>{body}</p></article></body></html>"
+    )
+
+
+def _make_html_with_date(title: str, body: str, pub_date: str) -> str:
+    return (
+        f'<html><head><title>{title}</title>'
+        f'<meta name="article:published_time" content="{pub_date}">'
+        f'</head><body><article>'
+        f'<p>Published: {pub_date}</p>'
+        f'<p>{body}</p></article></body></html>'
     )
 
 
@@ -295,3 +306,144 @@ class TestOrchestratorPageProcessing:
             orch._config.storage.file_store_path, "raw", raw_path
         )
         assert os.path.exists(full_path)
+
+
+# ── Date filtering tests ─────────────────────────────────────────
+
+
+@pytest_asyncio.fixture
+async def orchestrator_with_date_range():
+    """Orchestrator with a date-range plan (2026-02-25 to 2026-02-27)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = WebCollectorConfig()
+        config.storage.db_path = os.path.join(tmpdir, "test.db")
+        config.storage.file_store_path = tmpdir
+
+        plan = _make_plan(
+            date_range_start=date(2026, 2, 25),
+            date_range_end=date(2026, 2, 27),
+        )
+        orch = RunOrchestrator(config=config, plan=plan, prompt="date test")
+        orch._db = Database(config.storage.db_path)
+        await orch._db.init()
+
+        yield orch
+
+        await orch._db.close()
+
+
+class TestDateFiltering:
+    @pytest.mark.asyncio
+    async def test_page_in_range_stored(self, orchestrator_with_date_range):
+        """A page with a date inside the range should be stored."""
+        orch = orchestrator_with_date_range
+        html = _make_html_with_date(
+            "In Range", "Content within the date range.", "2026-02-26"
+        )
+        await orch._on_page_crawled({
+            "url": "http://example.com/in-range",
+            "html": html,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        assert orch._stats.documents_stored == 1
+        assert orch._stats.filtered_by_date == 0
+
+    @pytest.mark.asyncio
+    async def test_page_outside_range_filtered(self, orchestrator_with_date_range):
+        """A page with a date outside the range should be filtered."""
+        orch = orchestrator_with_date_range
+        html = _make_html_with_date(
+            "Too Old", "Content from before the date range.", "2025-01-15"
+        )
+        await orch._on_page_crawled({
+            "url": "http://example.com/too-old",
+            "html": html,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        assert orch._stats.documents_stored == 0
+        assert orch._stats.filtered_by_date == 1
+
+    @pytest.mark.asyncio
+    async def test_page_after_range_filtered(self, orchestrator_with_date_range):
+        """A page with a date after the range should be filtered."""
+        orch = orchestrator_with_date_range
+        html = _make_html_with_date(
+            "Too New", "Content from after the date range.", "2026-03-15"
+        )
+        await orch._on_page_crawled({
+            "url": "http://example.com/too-new",
+            "html": html,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        assert orch._stats.documents_stored == 0
+        assert orch._stats.filtered_by_date == 1
+
+    @pytest.mark.asyncio
+    async def test_page_no_date_stored_with_counter(self, orchestrator_with_date_range):
+        """A page with no detected date should be stored (not discarded), counter incremented."""
+        orch = orchestrator_with_date_range
+        html = _make_html("No Date", "Article with no date information whatsoever.")
+        await orch._on_page_crawled({
+            "url": "http://example.com/no-date",
+            "html": html,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        assert orch._stats.documents_stored == 1
+        assert orch._stats.filtered_by_date == 0
+        assert orch._stats.no_date_detected == 1
+
+    @pytest.mark.asyncio
+    async def test_no_date_range_everything_stored(self, orchestrator_with_db):
+        """When no date range is set on the plan, all pages are stored regardless of date."""
+        orch = orchestrator_with_db
+        html = _make_html_with_date(
+            "Any Date", "Content with an ancient date.", "2010-05-01"
+        )
+        await orch._on_page_crawled({
+            "url": "http://example.com/any-date",
+            "html": html,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        assert orch._stats.documents_stored == 1
+        assert orch._stats.filtered_by_date == 0
+        assert orch._stats.no_date_detected == 0
+
+    @pytest.mark.asyncio
+    async def test_page_on_boundary_stored(self, orchestrator_with_date_range):
+        """A page on the exact boundary dates should be stored (inclusive)."""
+        orch = orchestrator_with_date_range
+
+        # Start boundary
+        html1 = _make_html_with_date(
+            "Start Bound", "Content on the start date.", "2026-02-25"
+        )
+        await orch._on_page_crawled({
+            "url": "http://example.com/start",
+            "html": html1,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        # End boundary
+        html2 = _make_html_with_date(
+            "End Bound", "Content on the end date.", "2026-02-27"
+        )
+        await orch._on_page_crawled({
+            "url": "http://example.com/end",
+            "html": html2,
+            "status_code": 200,
+            "content_type": "text/html",
+        })
+
+        assert orch._stats.documents_stored == 2
+        assert orch._stats.filtered_by_date == 0
