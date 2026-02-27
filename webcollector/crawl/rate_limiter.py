@@ -8,8 +8,8 @@ we're polite to individual hosts.
 from __future__ import annotations
 
 import asyncio
+import random
 import time
-from collections import defaultdict
 
 
 class DomainRateLimiter:
@@ -24,7 +24,7 @@ class DomainRateLimiter:
         """
         self._default_rps = default_rps
         self._jitter = jitter
-        self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._locks: dict[str, asyncio.Lock] = {}
         self._last_request: dict[str, float] = {}
         self._domain_rps: dict[str, float] = {}
 
@@ -39,13 +39,26 @@ class DomainRateLimiter:
             return 0.0
         return 1.0 / rps
 
+    def _get_lock(self, domain: str) -> asyncio.Lock:
+        """Get or create a lock for the given domain.
+
+        Must be called from within the event loop. Lock creation itself is
+        synchronous and safe because Python's GIL ensures dict operations are
+        atomic at the bytecode level in a single-threaded async context.
+        """
+        lock = self._locks.get(domain)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[domain] = lock
+        return lock
+
     async def acquire(self, domain: str) -> None:
         """Wait until it's safe to make a request to the given domain.
 
         This ensures at least (1/rps) seconds between requests to the same domain,
         with optional jitter.
         """
-        async with self._locks[domain]:
+        async with self._get_lock(domain):
             delay = self._get_delay(domain)
             if delay <= 0:
                 return
@@ -55,9 +68,6 @@ class DomainRateLimiter:
             wait = delay - elapsed
 
             if wait > 0:
-                # Add jitter
-                import random
-
                 jitter_amount = delay * self._jitter
                 wait += random.uniform(-jitter_amount, jitter_amount)
                 wait = max(0.0, wait)

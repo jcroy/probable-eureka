@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class LLMConfig(BaseModel):
@@ -126,6 +129,13 @@ def load_config(
             file_data = yaml.safe_load(f)
             if isinstance(file_data, dict):
                 data = file_data
+            elif file_data is not None:
+                logger.warning(
+                    "Config file %s has invalid format: expected a YAML mapping, "
+                    "got %s. Using default configuration.",
+                    path,
+                    type(file_data).__name__,
+                )
 
     # Apply overrides
     if overrides:

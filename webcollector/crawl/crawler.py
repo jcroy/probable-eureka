@@ -141,7 +141,12 @@ class CrawlRunner:
         )
 
     def _expand_pagination_seeds(self) -> list[str]:
-        """Generate additional seed URLs from url_parameter pagination rules."""
+        """Generate additional seed URLs from url_parameter pagination rules.
+
+        The number of generated URLs is capped at the plan's max_pages (or the
+        config's max_pages) to prevent unbounded memory growth from LLM-generated
+        pagination rules with very large param_max values.
+        """
         pagination = self._plan.pagination
         if not pagination or pagination.strategy != "url_parameter":
             return []
@@ -154,11 +159,21 @@ class CrawlRunner:
             )
             return []
 
-        urls = []
-        for offset in range(
-            pagination.param_start, pagination.param_max + 1, pagination.param_step
-        ):
+        # Cap at max_pages to prevent OOM from large param_max values
+        max_pages = self._plan.max_pages or self._config.crawl.max_pages
+        step = pagination.param_step if pagination.param_step > 0 else 1
+
+        urls: list[str] = []
+        for offset in range(pagination.param_start, pagination.param_max + 1, step):
             urls.append(template.format(offset=offset))
+            if len(urls) >= max_pages:
+                logger.warning(
+                    "pagination_seeds_capped",
+                    generated=len(urls),
+                    max_pages=max_pages,
+                    param_max=pagination.param_max,
+                )
+                break
         return urls
 
     async def run(self) -> CrawlResult:

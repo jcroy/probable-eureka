@@ -18,6 +18,18 @@ DOCUMENT_EXTENSIONS = {
 }
 
 
+def _safe_urlparse(url: str) -> tuple:
+    """Parse a URL, returning an empty result for malformed URLs.
+
+    urlparse can raise ValueError on malformed IPv6 addresses and other
+    edge cases. This wrapper catches those and returns a blank ParseResult.
+    """
+    try:
+        return urlparse(url)
+    except ValueError:
+        return urlparse("")
+
+
 def normalize_url(url: str) -> str:
     """Normalize a URL to a canonical form for dedup.
 
@@ -25,8 +37,13 @@ def normalize_url(url: str) -> str:
     - Strips fragments
     - Sorts query params
     - Removes known tracking params
+
+    Returns the original URL unchanged if parsing fails.
     """
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
 
     scheme = parsed.scheme.lower()
     netloc = parsed.netloc.lower()
@@ -48,13 +65,16 @@ def normalize_url(url: str) -> str:
 
 
 def get_domain(url: str) -> str:
-    """Extract domain from a URL."""
-    return urlparse(url).netloc.lower()
+    """Extract domain from a URL.
+
+    Returns empty string for malformed URLs.
+    """
+    return _safe_urlparse(url).netloc.lower()
 
 
 def is_document_url(url: str) -> bool:
     """Check if a URL points to a downloadable document (by extension)."""
-    path = urlparse(url).path.lower()
+    path = _safe_urlparse(url).path.lower()
     return any(path.endswith(ext) for ext in DOCUMENT_EXTENSIONS)
 
 
