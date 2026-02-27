@@ -1,0 +1,20 @@
+# Example crawl plan for webcollector
+# Use with: webcollector collect --plan-file examples/sample_plan.yaml
+
+intent_summary: "Collect Python documentation pages for the asyncio module"
+target_domains:
+  - docs.python.org
+seed_urls:
+  - https://docs.python.org/3/library/asyncio.html
+url_patterns:
+  - "docs\\.python\\.org/3/library/asyncio"
+exclude_patterns:
+  - "\\?highlight="
+document_types:
+  - html
+max_depth: 2
+max_pages: 50
+keywords:
+  - asyncio
+  - coroutine
+  - event loop

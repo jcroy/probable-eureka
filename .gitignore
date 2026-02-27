@@ -1,22 +1,48 @@
-crawl4ai/providence_scraper/__pycache__/scraper_playwright.cpython-313.pyc
-crawl4ai/providence_scraper/utils/__pycache__/__init__.cpython-313.pyc
-crawl4ai/providence_scraper/utils/__pycache__/date_parser.cpython-313.pyc
-crawl4ai/providence_scraper/utils/__pycache__/file_helpers.cpython-313.pyc
-crawl4ai/providence_scraper/utils/__pycache__/progress.cpython-313.pyc
-crawl4ai/providence_scraper/output/
-crawl4ai/site_discovery/output/
-crawl4ai/site_discovery/results
-crawlee/node_modules/
-crawlee/storage/
-venv
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
 
-output/
-.scrapy/
+# Virtual environments
+venv/
+.venv/
 
-# Local environment variables
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
 .env
 .env.*
 !.env.example
+
+# Webcollector data
+data/
+logs/
+output/
+
+# Crawlee internal storage
+crawlee_storage/
+storage/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old project artifacts (pre-overhaul)
+crawl4ai/
+crawlee/node_modules/
+.scrapy/
 tmp/
