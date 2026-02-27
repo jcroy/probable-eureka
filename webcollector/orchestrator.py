@@ -161,6 +161,8 @@ class RunOrchestrator:
             errors=self._stats.errors,
             filtered_by_date=self._stats.filtered_by_date,
             no_date_detected=self._stats.no_date_detected,
+            low_content_quality=self._stats.low_content_quality,
+            content_mismatches=self._stats.content_mismatches,
         )
 
     async def _on_page_crawled(self, page_data: dict[str, Any]) -> None:
@@ -177,6 +179,28 @@ class RunOrchestrator:
             if not text.strip():
                 logger.debug("empty_extraction", url=url)
                 return
+
+            # Content quality ratio check: flag pages where extracted text
+            # is suspiciously small relative to the HTML size
+            html_len = len(html)
+            text_len = len(text)
+            if html_len > 5000 and text_len > 0:
+                ratio = text_len / html_len
+                if ratio < 0.05:
+                    self._stats.low_content_quality += 1
+                    logger.warning(
+                        "low_content_quality",
+                        url=url,
+                        html_len=html_len,
+                        text_len=text_len,
+                        ratio=round(ratio, 4),
+                    )
+
+            # Intent verification: on seed pages, check if extracted content
+            # matches what the user asked for (plan keywords)
+            if url in self._plan.seed_urls and self._plan.keywords:
+                if not self._check_intent_match(text, url):
+                    self._stats.content_mismatches += 1
 
             # Track pages with no detected date when a date range is active
             if self._has_date_range() and meta.published_date is None:
@@ -345,6 +369,26 @@ class RunOrchestrator:
             return False
         return True
 
+    def _check_intent_match(self, text: str, url: str) -> bool:
+        """Check if extracted text contains any of the plan's keywords.
+
+        Returns True if at least one keyword is found, False if none match.
+        A False result on a seed page suggests the page rendered but doesn't
+        contain the expected content (e.g., JS-hidden content, wrong page).
+        """
+        text_lower = text.lower()
+        for kw in self._plan.keywords:
+            if kw.lower() in text_lower:
+                return True
+
+        logger.warning(
+            "content_mismatch",
+            url=url,
+            keywords=self._plan.keywords,
+            text_preview=text[:200],
+        )
+        return False
+
     def _build_profile_system(self):
         """Set up the profile matcher and escalation manager."""
         from webcollector.profiles.escalation import EscalationManager
@@ -382,6 +426,8 @@ class RunStats:
         self.bytes_downloaded: int = 0
         self.filtered_by_date: int = 0
         self.no_date_detected: int = 0
+        self.low_content_quality: int = 0
+        self.content_mismatches: int = 0
 
 
 class RunResult:
@@ -397,6 +443,8 @@ class RunResult:
         errors: int = 0,
         filtered_by_date: int = 0,
         no_date_detected: int = 0,
+        low_content_quality: int = 0,
+        content_mismatches: int = 0,
     ) -> None:
         self.run_id = run_id
         self.pages_crawled = pages_crawled
@@ -406,3 +454,5 @@ class RunResult:
         self.errors = errors
         self.filtered_by_date = filtered_by_date
         self.no_date_detected = no_date_detected
+        self.low_content_quality = low_content_quality
+        self.content_mismatches = content_mismatches

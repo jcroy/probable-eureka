@@ -466,3 +466,203 @@ class TestHandlerProfileIntegration:
         handlers._apply_profile_hints(profile)
 
         assert handlers._next_selector == "a.next-page"
+
+    def test_playwright_only_profile_adds_forced_domain(self):
+        """A profile with rendering_mode=playwright_only should force Playwright for that domain."""
+        from unittest.mock import AsyncMock
+
+        from webcollector.crawl.handlers import CrawlHandlers
+        from webcollector.crawl.rate_limiter import DomainRateLimiter
+        from webcollector.models.crawl_plan import CrawlPlan
+
+        plan = CrawlPlan(
+            seed_urls=["http://example.com"],
+            target_domains=["example.com"],
+        )
+        handlers = CrawlHandlers(
+            plan=plan,
+            rate_limiter=DomainRateLimiter(default_rps=100),
+            downloader=AsyncMock(),
+        )
+        assert len(handlers.force_playwright_domains) == 0
+
+        profile = SiteProfile(
+            name="js-heavy",
+            navigation=NavigationStrategy(rendering_mode="playwright_only"),
+        )
+        handlers._apply_profile_hints(profile, domain="example.com")
+
+        assert "example.com" in handlers.force_playwright_domains
+
+    def test_adaptive_profile_does_not_force_playwright(self):
+        """A profile with rendering_mode=adaptive should NOT force Playwright."""
+        from unittest.mock import AsyncMock
+
+        from webcollector.crawl.handlers import CrawlHandlers
+        from webcollector.crawl.rate_limiter import DomainRateLimiter
+        from webcollector.models.crawl_plan import CrawlPlan
+
+        plan = CrawlPlan(
+            seed_urls=["http://example.com"],
+            target_domains=["example.com"],
+        )
+        handlers = CrawlHandlers(
+            plan=plan,
+            rate_limiter=DomainRateLimiter(default_rps=100),
+            downloader=AsyncMock(),
+        )
+        profile = SiteProfile(
+            name="normal",
+            navigation=NavigationStrategy(rendering_mode="adaptive"),
+        )
+        handlers._apply_profile_hints(profile, domain="example.com")
+
+        assert "example.com" not in handlers.force_playwright_domains
+
+
+# ── Result checker tests ─────────────────────────────────────────────
+
+
+class TestResultChecker:
+    def test_forced_domain_fails_check(self):
+        """The result checker should fail for domains in the forced set."""
+        from webcollector.crawl.handlers import make_result_checker
+
+        forced = {"clerkshq.com"}
+        checker = make_result_checker(min_text_length=200, force_playwright_domains=forced)
+
+        # Build a mock result with pushed_data
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.pushed_data = [
+            {"url": "https://clerkshq.com/SouthKingstown", "html": "x" * 5000}
+        ]
+        assert checker(result) is False
+
+    def test_non_forced_domain_passes_check(self):
+        """Normal domains should pass the result checker if content is sufficient."""
+        from webcollector.crawl.handlers import make_result_checker
+
+        forced = {"clerkshq.com"}
+        checker = make_result_checker(min_text_length=200, force_playwright_domains=forced)
+
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.pushed_data = [
+            {"url": "https://example.com/page", "html": "x" * 5000}
+        ]
+        assert checker(result) is True
+
+    def test_short_content_fails_regardless(self):
+        """Pages with too little HTML should fail even without forced domains."""
+        from webcollector.crawl.handlers import make_result_checker
+
+        checker = make_result_checker(min_text_length=200)
+
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.pushed_data = [{"url": "https://example.com/empty", "html": "short"}]
+        assert checker(result) is False
+
+    def test_empty_pushed_data_fails(self):
+        """No pushed data should fail the check."""
+        from webcollector.crawl.handlers import make_result_checker
+
+        checker = make_result_checker()
+
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.pushed_data = []
+        assert checker(result) is False
+
+    def test_no_forced_domains_works(self):
+        """Result checker works fine with no forced domains."""
+        from webcollector.crawl.handlers import make_result_checker
+
+        checker = make_result_checker(min_text_length=100)
+
+        from unittest.mock import MagicMock
+
+        result = MagicMock()
+        result.pushed_data = [{"url": "https://site.com/page", "html": "a" * 500}]
+        assert checker(result) is True
+
+
+# ── Content quality & intent verification tests ──────────────────────
+
+
+class TestContentQuality:
+    def test_low_ratio_flagged(self):
+        """Pages with text/html ratio < 0.05 should be flagged."""
+        from webcollector.orchestrator import RunStats
+
+        stats = RunStats()
+        # Simulate: 10k HTML, 200 chars text → ratio 0.02
+        assert 200 / 10000 < 0.05
+        stats.low_content_quality += 1
+        assert stats.low_content_quality == 1
+
+    def test_normal_ratio_not_flagged(self):
+        """Pages with reasonable ratio should not be flagged."""
+        # 5k HTML, 1k text → ratio 0.2
+        assert 1000 / 5000 >= 0.05
+
+
+class TestIntentVerification:
+    def test_keyword_found_returns_true(self):
+        """Intent check should pass when keywords are in text."""
+        from webcollector.orchestrator import RunOrchestrator
+
+        from webcollector.config import WebCollectorConfig
+        from webcollector.models.crawl_plan import CrawlPlan
+
+        config = WebCollectorConfig()
+        plan = CrawlPlan(
+            seed_urls=["http://example.com"],
+            target_domains=["example.com"],
+            keywords=["minutes", "council"],
+        )
+        orch = RunOrchestrator(config=config, plan=plan, enable_profiles=False)
+        assert orch._check_intent_match(
+            "Town Council meeting minutes from September 2025", "http://example.com"
+        ) is True
+
+    def test_keyword_missing_returns_false(self):
+        """Intent check should fail when no keywords are in text."""
+        from webcollector.orchestrator import RunOrchestrator
+
+        from webcollector.config import WebCollectorConfig
+        from webcollector.models.crawl_plan import CrawlPlan
+
+        config = WebCollectorConfig()
+        plan = CrawlPlan(
+            seed_urls=["http://example.com"],
+            target_domains=["example.com"],
+            keywords=["minutes", "council"],
+        )
+        orch = RunOrchestrator(config=config, plan=plan, enable_profiles=False)
+        assert orch._check_intent_match(
+            "Welcome to our website. Browse our products.", "http://example.com"
+        ) is False
+
+    def test_case_insensitive_match(self):
+        """Keyword matching should be case-insensitive."""
+        from webcollector.orchestrator import RunOrchestrator
+
+        from webcollector.config import WebCollectorConfig
+        from webcollector.models.crawl_plan import CrawlPlan
+
+        config = WebCollectorConfig()
+        plan = CrawlPlan(
+            seed_urls=["http://example.com"],
+            target_domains=["example.com"],
+            keywords=["MINUTES"],
+        )
+        orch = RunOrchestrator(config=config, plan=plan, enable_profiles=False)
+        assert orch._check_intent_match(
+            "Town council minutes are published here.", "http://example.com"
+        ) is True

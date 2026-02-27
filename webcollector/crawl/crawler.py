@@ -100,6 +100,7 @@ class CrawlRunner:
         max_depth: int,
         concurrency: ConcurrencySettings,
         crawlee_config: Configuration,
+        force_playwright_domains: set[str] | None = None,
     ):
         """Build the appropriate Crawlee crawler based on rendering mode.
 
@@ -132,7 +133,10 @@ class CrawlRunner:
         return AdaptivePlaywrightCrawler.with_beautifulsoup_static_parser(
             **shared_kwargs,
             respect_robots_txt_file=self._config.crawl.respect_robots_txt,
-            result_checker=make_result_checker(min_text_length=200),
+            result_checker=make_result_checker(
+                min_text_length=200,
+                force_playwright_domains=force_playwright_domains,
+            ),
             playwright_crawler_specific_kwargs=self._build_playwright_kwargs(),
         )
 
@@ -229,6 +233,7 @@ class CrawlRunner:
             max_depth=max_depth,
             concurrency=concurrency,
             crawlee_config=crawlee_config,
+            force_playwright_domains=self._handlers.force_playwright_domains,
         )
 
         # Register our handler

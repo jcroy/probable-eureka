@@ -84,6 +84,10 @@ class CrawlHandlers:
         self._on_file_downloaded = on_file_downloaded
         self._profile_matcher = profile_matcher
         self._escalation_manager = escalation_manager
+        # Shared mutable set: domains that should always use Playwright.
+        # Passed to make_result_checker so httpx results for these domains
+        # always fail, triggering Playwright re-fetch.
+        self.force_playwright_domains: set[str] = set()
         self._include_patterns = _safe_compile_patterns(plan.url_patterns)
         self._exclude_patterns = _safe_compile_patterns(plan.exclude_patterns)
         self._js_interactions: list[tuple[re.Pattern, JsInteraction]] = [
@@ -479,11 +483,15 @@ class CrawlHandlers:
         self._profiled_domains[domain] = profile
 
         if profile:
-            self._apply_profile_hints(profile)
+            self._apply_profile_hints(profile, domain=domain)
 
-    def _apply_profile_hints(self, profile: SiteProfile) -> None:
+    def _apply_profile_hints(self, profile: SiteProfile, domain: str = "") -> None:
         """Merge a profile's navigation hints into the current handler state."""
         nav = profile.navigation
+
+        # Force Playwright for this domain if the profile demands it
+        if nav.rendering_mode == "playwright_only" and domain:
+            self.force_playwright_domains.add(domain)
 
         # Add JS interactions from the profile (avoid duplicates)
         for hint in nav.js_interactions:
@@ -510,18 +518,29 @@ class CrawlHandlers:
             profile=profile.name,
             js_interactions=len(nav.js_interactions),
             pagination=bool(nav.pagination_selectors),
+            forced_playwright=nav.rendering_mode == "playwright_only",
         )
 
 
-def make_result_checker(min_text_length: int = 200):
+def make_result_checker(
+    min_text_length: int = 200,
+    force_playwright_domains: set[str] | None = None,
+):
     """Create a result checker for AdaptivePlaywrightCrawler.
 
     Returns a callable that checks whether a crawled page has meaningful content.
     If the httpx result fails this check, Crawlee will re-fetch with Playwright.
+
+    The force_playwright_domains set is shared with CrawlHandlers — when a profile
+    with rendering_mode="playwright_only" is matched, the domain is added to this
+    set and all subsequent httpx results for that domain will fail the check,
+    forcing Playwright rendering.
     """
     from crawlee.crawlers._adaptive_playwright._adaptive_playwright_crawler import (
         RequestHandlerRunResult,
     )
+
+    forced = force_playwright_domains or set()
 
     def check_result(result: RequestHandlerRunResult) -> bool:
         # Check if the page yielded any data via push_data
@@ -532,6 +551,14 @@ def make_result_checker(min_text_length: int = 200):
             html = item.get("html", "")
             if len(html) < min_text_length:
                 return False
+
+            # If this domain is marked as needing Playwright, fail the check
+            # so Crawlee re-fetches with the browser
+            url = item.get("url", "")
+            if url and forced:
+                domain = get_domain(url)
+                if domain in forced:
+                    return False
 
         return True
 
