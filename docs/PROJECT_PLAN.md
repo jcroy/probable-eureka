@@ -17,7 +17,7 @@
 - **Compliant:** Respects robots.txt, enforces rate limits, logs ToS awareness flags, and never circumvents authentication.
 - **Extensible:** Plugin architecture for new site adapters, parsers, and storage backends; designed for future RAG integration (chunking, embeddings).
 - **Pragmatic MVP:** First milestone delivers single-site crawl with PDF/HTML extraction in ~2-3 weeks; production-grade features layer on incrementally.
-- **Tech stack:** Python 3.11+, asyncio, httpx, Playwright (JS-rendered pages), BeautifulSoup/lxml, pdfplumber, SQLite (MVP) / Postgres (V1), structlog, Click CLI.
+- **Tech stack:** Python 3.11+, asyncio, httpx, Playwright (JS-rendered pages), BeautifulSoup/lxml, Mistral OCR API (PDF extraction), SQLite (MVP) / Postgres (V1), structlog, Click CLI.
 
 ---
 
@@ -415,8 +415,8 @@ Otherwise:
 | Format | Library | Strategy |
 |---|---|---|
 | HTML | `lxml` + `readability-lxml` | Use readability to extract main content. Fall back to full `lxml` tree for structured data. |
-| PDF | `pdfplumber` | Extract text preserving layout. If text layer is empty, flag for OCR. |
-| PDF (scanned) | `pytesseract` + `pdf2image` | Convert pages to images, run Tesseract OCR. Mark as `ocr_extracted`. |
+| PDF | Mistral OCR API (`mistral-ocr-latest`) | Send PDF to Mistral OCR endpoint. Returns structured Markdown with layout, tables, and math preserved. Handles both text-layer and scanned/image PDFs in a single call. Far cheaper and more accurate than local Tesseract. |
+| PDF (fallback) | `pdfplumber` | Offline fallback if Mistral API is unavailable or user opts out. Text-layer PDFs only. |
 | DOCX | `python-docx` | Extract paragraphs, tables, headers. Preserve structure as Markdown. |
 | XLSX/CSV | `openpyxl` / `csv` | Convert to structured text (pipe-delimited or Markdown table). |
 | XML | `lxml.etree` | Parse and extract text nodes. Handle namespaces. |
@@ -524,7 +524,7 @@ webcollector plan "Collect all Reuters articles about elections" --dry-run
 llm:
   provider: anthropic          # anthropic | openai | ollama | none
   model: claude-haiku-4-5-20251001
-  api_key_env: ANTHROPIC_API_KEY  # Env var name, never store key in config
+  api_key_env: ANTHROPIC_API_KEY   # Env var name, never store key in config
   max_tokens: 2048
   temperature: 0.0
 
@@ -557,10 +557,13 @@ fetch:
     - media
 
 extraction:
-  ocr_enabled: false            # Requires tesseract installed
-  ocr_languages: ["eng"]
+  pdf_provider: mistral          # mistral | local
+  mistral_api_key_env: MISTRAL_API_KEY
+  mistral_model: mistral-ocr-latest
+  local_ocr_enabled: false       # Only used when pdf_provider=local; requires tesseract
+  local_ocr_languages: ["eng"]
   llm_metadata: false
-  max_text_length: 500000       # Truncate extracted text beyond this
+  max_text_length: 500000        # Truncate extracted text beyond this
 
 storage:
   backend: sqlite               # sqlite | postgres
@@ -617,7 +620,7 @@ webcollector/
 ├── extractor/
 │   ├── __init__.py
 │   ├── html_extractor.py        # BeautifulSoup/lxml + readability
-│   ├── pdf_extractor.py         # pdfplumber + OCR fallback
+│   ├── pdf_extractor.py         # Mistral OCR API (primary) + pdfplumber fallback
 │   ├── docx_extractor.py        # python-docx
 │   ├── spreadsheet_extractor.py # openpyxl / csv
 │   ├── xml_extractor.py         # lxml.etree
@@ -736,15 +739,16 @@ sqlite = "webcollector.storage.sqlite_store:SQLiteStore"
 | `playwright` | JS-rendered pages | More reliable than Selenium, async-native Python bindings, auto-manages browser binaries. |
 | `beautifulsoup4` + `lxml` | HTML parsing | BS4 for ease of use + tolerant parsing; lxml as the fast parser backend. |
 | `readability-lxml` | Article extraction | Battle-tested port of Mozilla Readability. Extracts main content, strips boilerplate. |
-| `pdfplumber` | PDF text extraction | Better table handling than PyMuPDF for our use case. Preserves layout information. |
+| `mistralai` (Python SDK) | PDF text extraction via Mistral OCR API | Handles text-layer and scanned PDFs in one call. Returns structured Markdown. Cheap ($0.1/1K pages), fast, excellent quality — eliminates the need for local Tesseract in most cases. |
+| `pdfplumber` | Local PDF fallback | Offline fallback for text-layer PDFs when Mistral API is unavailable or user prefers local-only. |
 | `python-docx` | DOCX extraction | Standard, well-maintained, handles most Word documents. |
-| `pytesseract` + `pdf2image` | OCR fallback | Tesseract is the best open-source OCR. Only used when PDF has no text layer. |
 | `click` | CLI framework | Composable, well-documented, supports complex command trees. Better than argparse for our needs. |
 | `structlog` | Structured logging | JSON logging with context binding. Essential for debugging crawl runs. |
 | `pydantic` | Config & data validation | Validates config files and API responses. Type-safe. |
 | `sqlalchemy` (Core only) | Database abstraction | Works with SQLite and Postgres. Core (not ORM) for performance. |
 | `langdetect` | Language detection | Lightweight, no large model downloads. |
 | `anthropic` / `openai` | LLM API clients | For query interpretation. Anthropic preferred (Claude Haiku is fast and cheap). |
+| `mistralai` | Mistral API client | For PDF-to-text via Mistral OCR (`mistral-ocr-latest`). ~$0.1/1K pages. |
 
 ### H.2 Playwright vs httpx Decision Logic
 
@@ -815,7 +819,7 @@ text = await asyncio.get_event_loop().run_in_executor(
 - [ ] Politeness engine: robots.txt fetching + per-domain rate limiting
 - [ ] httpx async fetcher with retry logic
 - [ ] HTML extractor (readability-lxml)
-- [ ] PDF extractor (pdfplumber, no OCR)
+- [ ] PDF extractor (Mistral OCR API primary, pdfplumber local fallback)
 - [ ] Link extraction + URL normalization
 - [ ] Exact dedup (canonical URL + content hash)
 - [ ] SQLite storage (documents table, crawl_runs table)
@@ -844,7 +848,7 @@ text = await asyncio.get_event_loop().run_in_executor(
 - [ ] Playwright browser pool for JS-rendered pages
 - [ ] Auto-detection: httpx vs Playwright
 - [ ] DOCX extractor
-- [ ] OCR fallback for scanned PDFs
+- [ ] Scanned PDF handling already covered by Mistral OCR (verify quality on scanned corpus)
 - [ ] SimHash near-duplicate detection
 - [ ] Incremental crawl support (ETag / content hash comparison)
 - [ ] 2 site adapters: SEC EDGAR, arXiv
@@ -1021,10 +1025,10 @@ Files:            ./data/runs/abc-123/
 | 2 | **Anti-bot measures block crawling** | Entire domains become inaccessible | High | Polite crawling defaults; realistic User-Agent; Playwright for JS challenges; graceful degradation with clear error reporting. |
 | 3 | **LLM generates bad crawl plans** | Crawl targets wrong pages, wastes resources | Medium | Human approval step before execution; plan validation rules; dry-run mode; few-shot prompt engineering. |
 | 4 | **Rate limiting causes crawl to take hours** | User frustration, timeout issues | Medium | Concurrent cross-domain crawling; per-domain parallelism tuning; progress bar with ETA. |
-| 5 | **PDF extraction quality varies wildly** | Scanned/image PDFs yield no text | High | OCR fallback (Tesseract); quality score on extracted text; flag low-quality extractions in report. |
+| 5 | **PDF extraction quality varies wildly** | Scanned/image PDFs yield no text | Medium | Mistral OCR API handles both text-layer and scanned PDFs with high accuracy; pdfplumber local fallback for text-layer PDFs if API is unavailable; quality score on extracted text; flag low-quality extractions in report. |
 | 6 | **Legal/ToS violations** | Cease-and-desist, IP blocking, legal liability | Medium | Mandatory robots.txt compliance; configurable ToS-aware warnings; user acknowledges responsibility; no credential-based access. |
 | 7 | **Storage grows unbounded** | Disk full, performance degradation | Medium | Configurable `max_pages` cap; content-addressed dedup; storage usage in run reports; cleanup CLI command. |
-| 8 | **LLM API unavailable or rate-limited** | Cannot generate crawl plans | Low | Fallback to manual plan files; cache recent plans; support local models via Ollama. |
+| 8 | **LLM/OCR API unavailable or rate-limited** | Cannot generate crawl plans; PDF extraction degrades | Low | Fallback to manual plan files for LLM; pdfplumber fallback for PDF extraction; cache recent plans; support local models via Ollama. |
 | 9 | **Encoding issues corrupt text** | Mojibake, lost characters | Medium | Detect encoding via `charset_normalizer`; store raw bytes alongside text; log encoding mismatches. |
 | 10 | **Checkpoint corruption loses crawl progress** | Must restart long crawls from scratch | Low | Write checkpoints atomically (write-then-rename); keep last 3 checkpoints; validate on load. |
 | 11 | **Scope creep: crawler follows links outside target** | Fetches irrelevant pages, wastes resources | Medium | Strict URL pattern matching; domain allowlist; depth limit; LLM relevance check (V2). |
