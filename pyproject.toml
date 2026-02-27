@@ -50,6 +50,7 @@ dependencies = [
 
     # Utilities
     "langdetect>=1.0.9",
+    "duckduckgo-search>=8.0.0",
 ]
 
 [project.optional-dependencies]

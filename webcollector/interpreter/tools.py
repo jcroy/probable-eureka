@@ -54,9 +54,12 @@ TOOL_PLAYWRIGHT_PROBE = {
     "name": "playwright_probe",
     "description": (
         "Load a page in a real browser (Chromium), optionally perform JS interactions "
-        "(click elements, wait for content), and return the rendered text and links. "
-        "Use this when fetch_page returns little content (JS-heavy sites) or when you "
-        "need to click through navigation to discover hidden links."
+        "(click elements, wait for content), and return the rendered text, links, and "
+        "interactive elements with CSS selectors. Use this when fetch_page returns little "
+        "content (JS-heavy sites) or when you need to click through navigation to discover "
+        "hidden links. The output includes an 'Interactive elements' section listing buttons, "
+        "tree items, expandable nodes, etc. with CSS selectors you can use directly in "
+        "js_interactions steps (click, click_all)."
     ),
     "input_schema": {
         "type": "object",

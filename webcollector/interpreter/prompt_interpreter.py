@@ -76,6 +76,37 @@ to reveal content links. Most sites don't need this.
 - js_interactions action values: click, click_all, wait_for_selector, \
 wait_for_timeout, scroll_to_bottom
 
+## Navigating JS folder trees / hierarchical sites (e.g. ClerkBase, Laserfiche)
+Many government document sites use JavaScript folder trees that hide content \
+behind expandable nodes. To handle these:
+
+1. **Probe first**: Use `playwright_probe` on the root page to see the initial \
+structure. Check the "Interactive elements" section for CSS selectors.
+2. **Expand all folders**: Use `click_all` with a selector that targets collapsed \
+nodes (e.g. `[aria-expanded='false']`, `.folder`, `[role='treeitem']`). \
+Follow with `wait_for_timeout` to let content load.
+3. **Multi-level trees**: Chain multiple expand + wait steps. After expanding \
+top-level folders, sub-folders may appear that also need expanding.
+4. **Probe again**: After expanding, use `playwright_probe` with those same \
+interactions to see the fully expanded tree and discover document links.
+5. **Build js_interactions**: Copy the working expand steps into the crawl plan's \
+`js_interactions` so the crawler can replicate the expansion during the crawl.
+
+Example js_interactions for a folder tree:
+```json
+"js_interactions": [
+  {
+    "url_pattern": ".*clerkbase\\.com.*",
+    "steps": [
+      {"action": "click_all", "selector": "[aria-expanded='false']", "timeout_ms": 3000},
+      {"action": "wait_for_timeout", "timeout_ms": 2000},
+      {"action": "click_all", "selector": "[aria-expanded='false']", "timeout_ms": 3000},
+      {"action": "wait_for_timeout", "timeout_ms": 2000}
+    ]
+  }
+]
+```
+
 Output ONLY the <crawl_plan> tags with JSON when you are ready. \
 Do not add explanation outside the tags."""
 
