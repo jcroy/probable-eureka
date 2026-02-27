@@ -1,0 +1,22 @@
+crawl4ai/providence_scraper/__pycache__/scraper_playwright.cpython-313.pyc
+crawl4ai/providence_scraper/utils/__pycache__/__init__.cpython-313.pyc
+crawl4ai/providence_scraper/utils/__pycache__/date_parser.cpython-313.pyc
+crawl4ai/providence_scraper/utils/__pycache__/file_helpers.cpython-313.pyc
+crawl4ai/providence_scraper/utils/__pycache__/progress.cpython-313.pyc
+crawl4ai/providence_scraper/output/
+crawl4ai/site_discovery/output/
+crawl4ai/site_discovery/results
+crawlee/node_modules/
+crawlee/storage/
+venv
+__pycache__/
+*.pyc
+
+output/
+.scrapy/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+tmp/
