@@ -107,6 +107,21 @@ Example js_interactions for a folder tree:
 ]
 ```
 
+## Recognising AJAX navigation links
+Many sites use links with `href=""` or `href="#"` and `data-*` attributes for \
+JS-driven navigation (folder trees, AJAX tabs, document viewers). These appear \
+in two places in playwright_probe output:
+
+1. **Links section**: Shown as `[JS-nav]` with their `data-*` attributes. \
+These links CANNOT be fetched — they must be clicked via js_interactions.
+2. **Interactive elements section**: `data-*` attributes are shown after the \
+selector (e.g. `data: data-toc-url=/Content/Council data-level=1`). These \
+reveal the site's navigation structure.
+
+When building selectors for js_interactions, prefer `data-*` attribute \
+selectors (e.g. `a[data-toc-url="/Content/Council"]`) over class-based ones — \
+they are more stable across page updates.
+
 Output ONLY the <crawl_plan> tags with JSON when you are ready. \
 Do not add explanation outside the tags."""
 

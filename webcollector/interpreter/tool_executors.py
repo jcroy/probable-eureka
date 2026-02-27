@@ -234,55 +234,114 @@ async def execute_fetch_page(url: str, extract_links: bool = True) -> str:
 
 _INTERACTIVE_JS = """
 () => {
+    const MAX = """ + str(_MAX_INTERACTIVE_ELEMENTS) + """;
+    const seen = new Set();
+    const results = [];
+
+    // --- Helpers ---
+    function _getDataAttrs(el) {
+        const d = {};
+        for (const attr of el.attributes) {
+            if (attr.name.startsWith('data-') && attr.name !== 'data-testid') {
+                d[attr.name] = (attr.value || '').slice(0, 100);
+            }
+        }
+        return Object.keys(d).length ? d : null;
+    }
+
+    const _PREFERRED_DATA = [
+        'data-toc-url','data-url','data-href','data-path','data-node-id',
+        'data-id','data-target','data-action','data-src','data-link'
+    ];
+
+    function _bestDataAttr(dataAttrs, tag) {
+        if (!dataAttrs) return null;
+        for (const key of _PREFERRED_DATA) {
+            if (dataAttrs[key]) return tag + '[' + key + '="' + dataAttrs[key].replace(/"/g, '\\\\"') + '"]';
+        }
+        for (const [k, v] of Object.entries(dataAttrs)) {
+            if (v) return tag + '[' + k + '="' + v.replace(/"/g, '\\\\"') + '"]';
+        }
+        return null;
+    }
+
+    function _buildSelector(el, tag, dataAttrs) {
+        const id = el.id;
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const testId = el.getAttribute('data-testid') || '';
+        const classes = el.className && typeof el.className === 'string'
+            ? el.className.split(/\\s+/).filter(Boolean).slice(0, 3).join('.')
+            : '';
+        const text = (el.textContent || '').trim().slice(0, 60);
+
+        if (id) return '#' + CSS.escape(id);
+        const dataSel = _bestDataAttr(dataAttrs, tag);
+        if (dataSel) return dataSel;
+        if (ariaLabel) return '[aria-label="' + ariaLabel.replace(/"/g, '\\\\"') + '"]';
+        if (testId) return '[data-testid="' + testId.replace(/"/g, '\\\\"') + '"]';
+        if (classes) return tag + '.' + classes;
+        if (text && text.length <= 40) return 'text="' + text + '"';
+        return tag;
+    }
+
+    function _collect(el) {
+        if (seen.has(el) || results.length >= MAX) return;
+        seen.add(el);
+        const tag = el.tagName.toLowerCase();
+        const dataAttrs = _getDataAttrs(el);
+        results.push({
+            selector: _buildSelector(el, tag, dataAttrs),
+            text: (el.textContent || '').trim().slice(0, 60),
+            tag: tag,
+            role: el.getAttribute('role') || '',
+            expanded: el.getAttribute('aria-expanded'),
+            selected: el.getAttribute('aria-selected'),
+            dataAttrs: dataAttrs
+        });
+    }
+
+    // --- Phase 1: Explicit selectors ---
     const selectors = [
         'button', 'a[onclick]', '[role="treeitem"]', '[role="button"]',
         '[aria-expanded]', '[onclick]', '.folder', '.tree-node',
         'summary', 'details', '[data-toggle]', '[role="tab"]',
         '.expandable', '.collapsible', '.accordion-header',
-        '[aria-haspopup]', '.nav-item', '.menu-item'
+        '[aria-haspopup]', '.nav-item', '.menu-item',
+        '[aria-selected]', '[aria-controls]', '[aria-owns]',
+        '[role="menuitem"]', '[role="option"]', '[role="switch"]',
+        '[data-action]', '[data-target]', '[data-url]', '[data-src]',
+        '[data-href]', '[data-link]'
     ];
-    const seen = new Set();
-    const results = [];
     for (const sel of selectors) {
+        if (results.length >= MAX) break;
         for (const el of document.querySelectorAll(sel)) {
-            if (seen.has(el)) continue;
-            seen.add(el);
-            const tag = el.tagName.toLowerCase();
-            const id = el.id;
-            const role = el.getAttribute('role') || '';
-            const ariaLabel = el.getAttribute('aria-label') || '';
-            const ariaExpanded = el.getAttribute('aria-expanded');
-            const testId = el.getAttribute('data-testid') || '';
-            const text = (el.textContent || '').trim().slice(0, 60);
-            const classes = el.className && typeof el.className === 'string'
-                ? el.className.split(/\\s+/).slice(0, 3).join('.')
-                : '';
-
-            // Build a usable selector (priority: #id > [aria-label] > [data-testid] > tag.class)
-            let cssSelector;
-            if (id) {
-                cssSelector = '#' + CSS.escape(id);
-            } else if (ariaLabel) {
-                cssSelector = `[aria-label="${ariaLabel.replace(/"/g, '\\\\"')}"]`;
-            } else if (testId) {
-                cssSelector = `[data-testid="${testId.replace(/"/g, '\\\\"')}"]`;
-            } else if (classes) {
-                cssSelector = tag + '.' + classes;
-            } else if (text && text.length <= 40) {
-                cssSelector = `text="${text}"`;
-            } else {
-                cssSelector = tag;
-            }
-
-            results.push({
-                selector: cssSelector,
-                text: text,
-                tag: tag,
-                role: role,
-                expanded: ariaExpanded
-            });
+            _collect(el);
         }
     }
+
+    // --- Phase 2: AJAX link heuristic ---
+    // a[href=""] or a[href="#"] that carry at least one data-* attribute
+    for (const el of document.querySelectorAll('a[href=""], a[href="#"]')) {
+        if (results.length >= MAX) break;
+        if (_getDataAttrs(el)) _collect(el);
+    }
+
+    // --- Phase 3: Data-heavy element heuristic ---
+    // Elements with 2+ data-* attrs AND a behavioral signal
+    const behavioralTags = new Set(['a', 'button']);
+    for (const el of document.querySelectorAll('*')) {
+        if (results.length >= MAX) break;
+        if (seen.has(el)) continue;
+        const dAttrs = _getDataAttrs(el);
+        if (!dAttrs || Object.keys(dAttrs).length < 2) continue;
+        const tag = el.tagName.toLowerCase();
+        const hasSignal = behavioralTags.has(tag)
+            || el.hasAttribute('role')
+            || el.hasAttribute('onclick')
+            || el.hasAttribute('tabindex');
+        if (hasSignal) _collect(el);
+    }
+
     return results;
 }
 """
@@ -310,9 +369,16 @@ def _format_interactive_elements(elements: list[dict]) -> str:
             parts.append(f"role={el['role']}")
         if el.get("expanded") is not None:
             parts.append(f"expanded={el['expanded']}")
+        if el.get("selected") is not None:
+            parts.append(f"selected={el['selected']}")
         if el.get("text"):
             parts.append(f'"{el["text"]}"')
         parts.append(f"→ {el['selector']}")
+        # Append data-* attributes when present
+        data_attrs = el.get("dataAttrs")
+        if data_attrs:
+            data_str = " ".join(f"{k}={v}" for k, v in data_attrs.items())
+            parts.append(f" data: {data_str}")
         lines.append(" ".join(parts))
     return "\n".join(lines)
 
@@ -394,14 +460,33 @@ async def execute_playwright_probe(
 
     # Extract links
     links: list[str] = []
-    seen: set[str] = set()
+    seen_links: set[str] = set()
     for a_tag in soup.find_all("a", href=True):
         href = a_tag["href"]
-        if not href or href.startswith(("#", "javascript:", "mailto:")):
+        # Check for AJAX links: href="" or href="#" with data-* attributes
+        has_data_attr = any(
+            attr.startswith("data-") and attr != "data-testid"
+            for attr in a_tag.attrs
+        )
+        if href in ("", "#"):
+            if has_data_attr:
+                # Include as JS-nav link with data hint
+                link_text = a_tag.get_text(strip=True)[:80]
+                data_hint = " ".join(
+                    f"{k}={str(v)[:60]}"
+                    for k, v in a_tag.attrs.items()
+                    if k.startswith("data-") and k != "data-testid"
+                )
+                key = f"js-nav:{link_text}:{data_hint}"
+                if key not in seen_links:
+                    seen_links.add(key)
+                    links.append(f"  [JS-nav] {link_text}  ({data_hint})")
+            continue
+        if href.startswith(("javascript:", "mailto:")):
             continue
         full = urljoin(url, href)
-        if full not in seen:
-            seen.add(full)
+        if full not in seen_links:
+            seen_links.add(full)
             link_text = a_tag.get_text(strip=True)[:80]
             links.append(f"  {link_text} → {full}")
 

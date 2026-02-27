@@ -453,6 +453,116 @@ class TestInteractiveElements:
         assert "expanded=false" in output
 
 
+class TestInteractiveElementFormatting:
+    """Tests for data-attr and selected support in _format_interactive_elements."""
+
+    def test_format_elements_with_data_attrs(self):
+        """dataAttrs dict values appear as 'data: key=value' in output."""
+        elements = [
+            {
+                "selector": 'a[data-toc-url="/Content/Council"]',
+                "text": "City Council",
+                "tag": "a",
+                "role": "",
+                "expanded": None,
+                "selected": None,
+                "dataAttrs": {"data-toc-url": "/Content/Council", "data-level": "1"},
+            }
+        ]
+        output = _format_interactive_elements(elements)
+        assert "data: data-toc-url=/Content/Council data-level=1" in output
+        assert "City Council" in output
+        assert 'a[data-toc-url="/Content/Council"]' in output
+
+    def test_format_elements_with_selected(self):
+        """aria-selected value shown as 'selected=' in output."""
+        elements = [
+            {
+                "selector": '[role="tab"]',
+                "text": "Tab 1",
+                "tag": "div",
+                "role": "tab",
+                "expanded": None,
+                "selected": "true",
+                "dataAttrs": None,
+            }
+        ]
+        output = _format_interactive_elements(elements)
+        assert "selected=true" in output
+        assert "role=tab" in output
+
+    def test_format_elements_backward_compat(self):
+        """Old-format dicts (no dataAttrs/selected) still render fine, no 'data:' line."""
+        elements = [
+            {
+                "selector": "#btn",
+                "text": "OK",
+                "tag": "button",
+                "role": "button",
+                "expanded": None,
+            }
+        ]
+        output = _format_interactive_elements(elements)
+        assert "#btn" in output
+        assert "data:" not in output
+        assert "selected=" not in output
+
+
+class TestAjaxLinks:
+    """Tests for AJAX link handling in playwright_probe output."""
+
+    @pytest.mark.asyncio
+    async def test_includes_ajax_links(self):
+        """href="" links with data-* attrs appear as [JS-nav] in output."""
+        rendered_html = """
+        <html><body>
+        <a href="" class="js-doc-view" data-toc-url="/Content/Council">City Council</a>
+        <a href="" data-toc-url="/Content/Minutes" data-level="2">Minutes</a>
+        <a href="/about">About</a>
+        </body></html>
+        """
+        mock_async_pw, mock_page, _ = _make_playwright_mocks(
+            rendered_html, interactive_elements=[]
+        )
+        mock_module = MagicMock()
+        mock_module.async_playwright = mock_async_pw
+
+        with patch.dict("sys.modules", {"playwright.async_api": mock_module}):
+            result = await execute_playwright_probe("https://example.com")
+
+        assert "[JS-nav]" in result
+        assert "City Council" in result
+        assert "data-toc-url=/Content/Council" in result
+        # Regular link should still work
+        assert "/about" in result
+
+    @pytest.mark.asyncio
+    async def test_ajax_links_without_data_attrs_excluded(self):
+        """href="" links WITHOUT data-* attrs are still filtered out from links section."""
+        rendered_html = """
+        <html><body>
+        <a href="">Plain empty link</a>
+        <a href="#">Hash link</a>
+        <a href="/real">Real link</a>
+        </body></html>
+        """
+        mock_async_pw, mock_page, _ = _make_playwright_mocks(
+            rendered_html, interactive_elements=[]
+        )
+        mock_module = MagicMock()
+        mock_module.async_playwright = mock_async_pw
+
+        with patch.dict("sys.modules", {"playwright.async_api": mock_module}):
+            result = await execute_playwright_probe("https://example.com")
+
+        assert "[JS-nav]" not in result
+        # The text content section will contain the link text, but the Links section should not
+        links_section = result.split("Links found")[1] if "Links found" in result else ""
+        assert "Plain empty link" not in links_section
+        assert "Hash link" not in links_section
+        assert "/real" in result
+
+
 class TestDispatchTool:
     @pytest.mark.asyncio
     @patch("webcollector.interpreter.tool_executors.execute_web_search")
