@@ -17,7 +17,8 @@
 - **Compliant:** Respects robots.txt, enforces rate limits, logs ToS awareness flags, and never circumvents authentication.
 - **Extensible:** Plugin architecture for new site adapters, parsers, and storage backends; designed for future RAG integration (chunking, embeddings).
 - **Pragmatic MVP:** First milestone delivers single-site crawl with PDF/HTML extraction in ~2-3 weeks; production-grade features layer on incrementally.
-- **Tech stack:** Python 3.11+, asyncio, httpx, Playwright (JS-rendered pages), BeautifulSoup/lxml, Mistral OCR API (PDF extraction), SQLite (MVP) / Postgres (V1), structlog, Click CLI.
+- **Crawl engine:** Crawlee (Python) provides request queuing, dedup, retries, robots.txt, session management, and adaptive httpx↔Playwright switching out of the box — eliminating weeks of plumbing code.
+- **Tech stack:** Python 3.11+, Crawlee (crawl orchestration), asyncio, httpx + Playwright (via Crawlee's `AdaptivePlaywrightCrawler`), BeautifulSoup/lxml, Mistral OCR API (PDF extraction), SQLite (MVP) / Postgres (V1), structlog, Click CLI.
 
 ---
 
@@ -142,68 +143,72 @@
 ### D.1 High-Level Component Diagram
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                         CLI / API                            │
-│  (Click CLI)       (FastAPI — future)                        │
-└──────────────┬───────────────────────────────┬───────────────┘
-               │                               │
-               ▼                               ▼
-┌──────────────────────────┐   ┌───────────────────────────────┐
-│   Query Interpreter      │   │   Run Manager                 │
-│   (LLM: plan generation) │   │   (state, resume, reporting)  │
-└──────────┬───────────────┘   └───────────────┬───────────────┘
-           │  CrawlPlan                        │
-           ▼                                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    Crawl Orchestrator                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐ │
-│  │ Source    │  │ URL      │  │ Politeness│  │ Checkpoint   │ │
-│  │ Discovery│→ │ Frontier │→ │ Engine    │→ │ Manager      │ │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────────┘ │
-└──────────────────────────┬───────────────────────────────────┘
-                           │  URLs to fetch
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                      Fetcher Pool                            │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐    │
-│  │ HTTP Client  │  │ Browser Pool │  │ File Downloader  │    │
-│  │ (httpx)      │  │ (Playwright) │  │ (streams)        │    │
-│  └─────────────┘  └──────────────┘  └──────────────────┘    │
-└──────────────────────────┬───────────────────────────────────┘
-                           │  Raw responses
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   Extraction Pipeline                        │
-│  ┌────────────┐ ┌──────────┐ ┌─────────┐ ┌───────────────┐  │
-│  │ HTML Parser│ │ PDF      │ │ DOCX    │ │ Metadata      │  │
-│  │ (BS4/lxml) │ │ Extractor│ │ Extractor│ │ Extractor     │  │
-│  └────────────┘ └──────────┘ └─────────┘ └───────────────┘  │
-└──────────────────────────┬───────────────────────────────────┘
-                           │  Documents
-                           ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   Dedup & Storage                            │
-│  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐     │
-│  │ Dedup      │  │ DB Writer    │  │ File Store       │     │
-│  │ Engine     │→ │ (SQLite/PG)  │  │ (filesystem/S3)  │     │
-│  └────────────┘  └──────────────┘  └──────────────────┘     │
-└──────────────────────────────────────────────────────────────┘
++--------------------------------------------------------------+
+|                         CLI / API                            |
+|  (Click CLI)       (FastAPI -- future)                       |
++------+---------------------------------+---------------------+
+       |                                 |
+       v                                 v
++-------------------------+   +-------------------------------+
+|   Query Interpreter     |   |   Run Manager                 |
+|   (LLM: plan generation)|   |   (state, resume, reporting)  |
++----------+--------------+   +---------------+---------------+
+           |  CrawlPlan                       |
+           v                                  v
++--------------------------------------------------------------+
+|              Crawlee  (crawl engine)                          |
+|                                                              |
+|  +--------------------------------------------------------+  |
+|  |  AdaptivePlaywrightCrawler                             |  |
+|  |  (auto httpx <-> Playwright per URL)                   |  |
+|  +--------------------------------------------------------+  |
+|  Built-in: RequestQueue (dedup+persist) | Retry+backoff      |
+|            robots.txt enforcement       | SessionPool         |
+|            AutoscaledPool (concurrency) | FingerprintGen      |
+|                                                              |
+|  +------------+  +-----------------+  +-------------------+  |
+|  | Source      |  | Per-Domain      |  | File Downloader   |  |
+|  | Discovery   |  | Rate Limiter    |  | (custom streams)  |  |
+|  | (ours)      |  | (ours, thin)    |  | (ours)            |  |
+|  +------------+  +-----------------+  +-------------------+  |
++-------------------------------+------------------------------+
+                                |  Raw responses
+                                v
++--------------------------------------------------------------+
+|                   Extraction Pipeline  (ours)                |
+|  +------------+ +----------+ +---------+ +---------------+   |
+|  | HTML Parser| | PDF      | | DOCX    | | Metadata      |   |
+|  | (BS4/lxml) | | (Mistral)| | Extractor| | Extractor    |   |
+|  +------------+ +----------+ +---------+ +---------------+   |
++-------------------------------+------------------------------+
+                                |  Documents
+                                v
++--------------------------------------------------------------+
+|                   Dedup & Storage  (ours)                     |
+|  +------------+  +--------------+  +------------------+      |
+|  | Dedup      |  | DB Writer    |  | File Store       |      |
+|  | Engine     |->| (SQLite/PG)  |  | (filesystem/S3)  |      |
+|  +------------+  +--------------+  +------------------+      |
++--------------------------------------------------------------+
+
+Legend: "(ours)" = custom code we write; everything else provided by Crawlee
 ```
 
 ### D.2 Key Design Decisions & Tradeoffs
 
 | # | Decision | Rationale | Tradeoff |
 |---|---|---|---|
-| 1 | **asyncio as primary concurrency model** | Crawling is I/O-bound; asyncio handles thousands of concurrent connections with low overhead. | Harder to debug than threads; all I/O must be async-compatible. |
-| 2 | **LLM for query interpretation, not for crawl execution** | LLMs are good at understanding intent and generating structured plans; bad at deterministic, high-volume operations. | Adds an API dependency and cost; mitigated by making LLM calls optional (user can supply a manual crawl plan). |
-| 3 | **httpx for HTTP, Playwright only when needed** | 90%+ of pages don't need JS rendering. httpx is fast and lightweight. Playwright is slow and resource-heavy. | Need a reliable heuristic or config to decide when to use Playwright; default to httpx, fall back on failure or user config. |
-| 4 | **SQLite for MVP, Postgres for V1** | SQLite is zero-config and file-portable, perfect for local-first. Postgres adds concurrency and scale. | SQLite has write-lock contention under heavy concurrency; mitigated with WAL mode and a single writer task. |
-| 5 | **Filesystem for raw file storage, not blobs in DB** | Files on disk are inspectable, streamable, and cheap. DB stores metadata + paths. | Must handle path sanitization and directory structure; mitigated with content-addressed storage (hash-based paths). |
-| 6 | **Plugin architecture via Python entry points** | Site adapters, parsers, and storage backends vary widely. Plugins allow extension without core changes. | Adds complexity; mitigated by providing a simple abstract base class and clear registration mechanism. |
-| 7 | **Crawl plan approval step before execution** | Prevents wasted resources on misinterpreted prompts. User sees what will be crawled. | Adds friction; mitigated with `--auto-approve` flag for automation. |
-| 8 | **Content-addressed file storage (SHA-256 paths)** | Natural dedup for identical files, safe filenames, easy integrity verification. | Filenames are opaque; mitigated by manifest files mapping hashes to original URLs/names. |
-| 9 | **Robots.txt is mandatory, not optional** | Legal and ethical compliance is non-negotiable. | May block access to desired content; user is informed and can seek alternative sources. |
-| 10 | **Structured logging from day one** | Crawl debugging requires knowing exactly what happened; structured logs enable querying and dashboards. | Slight overhead vs print statements; negligible in practice. |
+| 1 | **Crawlee as crawl engine** | Provides request queue, dedup, retry, robots.txt, session management, and adaptive httpx/Playwright switching out of the box. Saves 3-6 weeks of plumbing. asyncio-native, so LLM API calls work seamlessly in handlers. | Framework dependency; must work within Crawlee's callback model. Mitigated: Crawlee's model is simple async functions, not a rigid class hierarchy. |
+| 2 | **AdaptivePlaywrightCrawler over manual httpx/Playwright switching** | Crawlee's adaptive crawler auto-learns per-domain whether httpx or Playwright is needed, validates predictions, and caches decisions. Eliminates our custom heuristic code entirely. | Less control over the exact switching logic. Mitigated: custom `RenderingTypePredictor` and `result_checker` can be plugged in. |
+| 3 | **LLM for query interpretation, not for crawl execution** | LLMs are good at understanding intent and generating structured plans; bad at deterministic, high-volume operations. | Adds an API dependency and cost; mitigated by making LLM calls optional (user can supply a manual crawl plan). |
+| 4 | **Thin per-domain rate limiter on top of Crawlee** | Crawlee only has global `max_tasks_per_minute`, not per-domain throttling. We add a lightweight `asyncio.Semaphore` + delay per domain (~50 lines). | Slight added complexity on top of Crawlee's concurrency. Mitigated: isolated in one small module. |
+| 5 | **SQLite for MVP, Postgres for V1** | SQLite is zero-config and file-portable, perfect for local-first. Postgres adds concurrency and scale. | SQLite has write-lock contention under heavy concurrency; mitigated with WAL mode and a single writer task. |
+| 6 | **Filesystem for raw file storage, not blobs in DB** | Files on disk are inspectable, streamable, and cheap. DB stores metadata + paths. | Must handle path sanitization and directory structure; mitigated with content-addressed storage (hash-based paths). |
+| 7 | **Plugin architecture via Python entry points** | Site adapters, parsers, and storage backends vary widely. Plugins allow extension without core changes. | Adds complexity; mitigated by providing a simple abstract base class and clear registration mechanism. |
+| 8 | **Crawl plan approval step before execution** | Prevents wasted resources on misinterpreted prompts. User sees what will be crawled. | Adds friction; mitigated with `--auto-approve` flag for automation. |
+| 9 | **Content-addressed file storage (SHA-256 paths)** | Natural dedup for identical files, safe filenames, easy integrity verification. | Filenames are opaque; mitigated by manifest files mapping hashes to original URLs/names. |
+| 10 | **Robots.txt is mandatory, not optional** | Legal and ethical compliance is non-negotiable. | May block access to desired content; user is informed and can seek alternative sources. |
+| 11 | **Structured logging from day one** | Crawl debugging requires knowing exactly what happened; structured logs enable querying and dashboards. | Slight overhead vs print statements; negligible in practice. |
 
 ---
 
@@ -349,66 +354,112 @@ class CrawlPlan:
 
 **Output:** A deduplicated set of URLs added to the URL Frontier.
 
-### F.3 Crawl Orchestration
+### F.3 Crawl Orchestration (Crawlee)
 
-**URL Frontier:**
-- Priority queue (heapq or Redis for distributed).
-- Priority factors: depth (lower = higher priority), discovery method (sitemap > search > link), freshness.
-- Tracks state per URL: `pending`, `in_progress`, `completed`, `failed`, `skipped`.
+Crawlee handles the core orchestration loop. We configure it; we don't rewrite it.
 
-**Politeness Engine:**
-- Per-domain token bucket rate limiter.
-- Default: 1 request/second/domain (configurable per domain in config).
-- Reads `Crawl-delay` from robots.txt if present.
-- Randomized delay jitter (±20%) to avoid detection as bot.
+**RequestQueue (built-in):**
+- Persistent, deduplicated queue. Survives process restarts.
+- URLs added via `context.add_requests()` inside request handlers.
+- Automatic `unique_key` dedup based on URL normalization.
 
-**Checkpoint Manager:**
-- Every 50 fetched URLs (configurable), serialize frontier state + fetch log to disk.
-- On resume, reload checkpoint and skip already-completed URLs.
+**AdaptivePlaywrightCrawler (built-in):**
+- Automatically chooses httpx or Playwright per URL.
+- Uses `RenderingTypePredictor` that learns from crawl results.
+- Periodically validates predictions by running both methods.
+- We provide a custom `result_checker` to verify extracted content meets expectations.
 
-**Orchestrator loop (pseudocode):**
-```
-while frontier.has_pending():
-    url = frontier.next()
-    if not robots_checker.is_allowed(url):
-        frontier.mark_skipped(url, reason="robots.txt")
-        continue
-    await rate_limiter.acquire(domain_of(url))
-    response = await fetcher.fetch(url)
-    documents = await extractor.extract(response)
+**Politeness:**
+- `respect_robots_txt_file=True` — Crawlee fetches and enforces robots.txt automatically.
+- `max_tasks_per_minute` — global rate cap (set via config, e.g., 60 = ~1 req/sec average).
+- **Per-domain rate limiter (ours):** Thin wrapper using `asyncio.Semaphore` + `asyncio.sleep` per domain. Called at the top of each request handler before processing. ~50 lines of code.
+
+**Retry & Backoff (built-in):**
+- `max_request_retries` (default: 3). Exponential backoff on failure.
+- `failed_request_handler` logs permanently failed URLs to our DB.
+- Additional HTTP status codes (e.g., 429, 503) configurable as retry triggers.
+
+**Session Management (built-in):**
+- `SessionPool` rotates headers, cookies, and User-Agent per session.
+- Sessions track success/failure rates and retire blocked identities.
+- We configure a custom User-Agent: `webcollector/0.1 (+https://github.com/yourorg/webcollector)`.
+
+**Concurrency (built-in):**
+- `AutoscaledPool` dynamically adjusts concurrency based on CPU/memory usage.
+- `min_concurrency` / `max_concurrency` bounds (configurable).
+- No manual `asyncio.Semaphore` for global concurrency — Crawlee handles it.
+
+**Checkpoint / Resume (built-in):**
+- `RequestQueue` persists state to disk automatically.
+- On crash + restart, Crawlee resumes from where it left off — already-processed URLs are skipped.
+- Our `CrawlRun` record stores the Crawlee storage directory path for resumability.
+
+**Orchestrator pseudocode (our request handler inside Crawlee):**
+```python
+@crawler.router.default_handler
+async def handle_request(context: AdaptivePlaywrightCrawlingContext) -> None:
+    url = context.request.url
+
+    # Per-domain rate limiting (ours)
+    await domain_rate_limiter.acquire(get_domain(url))
+
+    # Crawlee already fetched the page (httpx or Playwright, auto-decided)
+    # We just process the response
+    page_html = context.parsed_content  # BeautifulSoup object
+
+    # Extract document content
+    documents = await extractor.extract(url, page_html, context.http_response)
+
+    # Save raw + extracted content
     for doc in documents:
-        new_urls = link_extractor.extract_links(doc, scope=crawl_plan)
-        frontier.add_many(new_urls)
-    await storage.store(documents)
-    frontier.mark_completed(url)
-    checkpoint_manager.maybe_checkpoint()
+        await storage.store(doc)
+
+    # Discover new links (Crawlee provides enqueue_links helper)
+    await context.enqueue_links(
+        strategy=EnqueueStrategy.SAME_DOMAIN,
+        include=[re.compile(pattern) for pattern in crawl_plan.url_patterns],
+        exclude=[re.compile(pattern) for pattern in crawl_plan.exclude_patterns],
+    )
+
+    # Enqueue attachment/download URLs discovered in page
+    attachment_urls = link_extractor.find_downloads(page_html, url)
+    await context.add_requests([Request.from_url(u) for u in attachment_urls])
 ```
 
 ### F.4 Fetching / Downloading
 
-**Decision tree for fetch method:**
+**HTML pages — handled entirely by Crawlee:**
+- `AdaptivePlaywrightCrawler` auto-decides httpx vs Playwright per URL.
+- Connection pooling, HTTP/2, redirect following, timeout management — all built-in.
+- Browser pool for Playwright: configurable pool size, resource blocking (images/fonts/media).
+- Fingerprint generation (TLS + browser fingerprints) for stealth — built-in.
 
+**File downloads (PDF/DOCX/etc) — our custom `FileDownloader`:**
+- Crawlee's handlers give us the page HTML. When we detect download links (by extension or Content-Type), we download files ourselves via `httpx` streaming.
+- Why not Crawlee for file downloads? Crawlee's handlers expect HTML parsing. Binary files need streaming download + direct-to-disk writes, which is simpler to handle ourselves.
+- Timeout: 120s for large file downloads (configurable).
+- Respects the per-domain rate limiter before each download.
+
+**Crawlee configuration we set:**
+```python
+crawler = AdaptivePlaywrightCrawler(
+    # Concurrency
+    max_tasks_per_minute=crawl_config.max_tasks_per_minute,  # e.g., 60
+    concurrency_settings=ConcurrencySettings(
+        min_concurrency=1,
+        max_concurrency=crawl_config.concurrent_requests,  # e.g., 10
+    ),
+    # Politeness
+    respect_robots_txt_file=True,
+    max_request_retries=crawl_config.max_retries,  # e.g., 3
+    # Browser config
+    playwright_crawler_kwargs={
+        "browser_pool_options": {"max_open_pages": crawl_config.playwright_pool_size},
+    },
+    # Adaptive rendering
+    result_checker=our_result_checker,  # verifies page has real content
+)
 ```
-Is URL a direct file (PDF/DOCX/etc by extension or Content-Type)?
-  → Use httpx streaming download
-Does the site require JS rendering? (config flag OR previous httpx fetch returned empty/stub content)
-  → Use Playwright (headless Chromium)
-Otherwise:
-  → Use httpx (async, connection pooling, HTTP/2)
-```
-
-**httpx configuration:**
-- Connection pool: 100 connections per domain, 500 total.
-- Timeout: 30s connect, 60s read, 120s for large file downloads.
-- Retry: 3 attempts with exponential backoff on 429/5xx.
-- Follow redirects (max 5 hops).
-- Custom User-Agent: `webcollector/0.1 (+https://github.com/yourorg/webcollector; contact@yourorg.com)`
-
-**Playwright configuration:**
-- Pool of 3 browser contexts (configurable).
-- Wait for `networkidle` event (max 15s).
-- Block unnecessary resources: images, fonts, media (configurable).
-- Extract final rendered HTML via `page.content()`.
 
 ### F.5 Parsing & Extraction
 
@@ -606,17 +657,12 @@ webcollector/
 │   ├── sitemap.py               # Sitemap fetching + parsing
 │   ├── rss.py                   # RSS/Atom feed discovery
 │   └── link_graph.py            # Link extraction + scope filtering
-├── orchestrator/
+├── crawl/
 │   ├── __init__.py
-│   ├── frontier.py              # URL priority queue
-│   ├── politeness.py            # Rate limiter, robots.txt checker
-│   ├── checkpoint.py            # Checkpoint save/load
-│   └── runner.py                # Main crawl loop
-├── fetcher/
-│   ├── __init__.py
-│   ├── http_client.py           # httpx-based async fetcher
-│   ├── browser.py               # Playwright browser pool
-│   └── downloader.py            # Streaming file downloader
+│   ├── crawler.py               # AdaptivePlaywrightCrawler setup + config
+│   ├── handlers.py              # Crawlee request handler (router callbacks)
+│   ├── rate_limiter.py          # Per-domain rate limiter (thin asyncio wrapper)
+│   └── downloader.py            # Streaming file downloader for PDFs/DOCX (httpx)
 ├── extractor/
 │   ├── __init__.py
 │   ├── html_extractor.py        # BeautifulSoup/lxml + readability
@@ -655,7 +701,6 @@ webcollector/
     ├── __init__.py
     ├── url_utils.py             # URL parsing, normalization
     ├── file_utils.py            # Safe path generation
-    ├── retry.py                 # Retry/backoff utilities
     └── hashing.py               # Hashing utilities
 ```
 
