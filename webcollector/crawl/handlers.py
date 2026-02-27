@@ -78,9 +78,9 @@ class CrawlHandlers:
             pages_so_far=self._pages_crawled,
         )
 
-        # Get the page content (Crawlee already fetched it — httpx or Playwright)
-        soup = context.soup
-        http_response = context.http_response
+        # Get HTML content — works for both httpx (soup) and Playwright (page) paths
+        html, soup = await self._get_page_content(context)
+        http_response = getattr(context, "http_response", None)
 
         # Build page data for downstream processing
         page_data = {
@@ -92,7 +92,7 @@ class CrawlHandlers:
                 if http_response
                 else "text/html"
             ),
-            "html": str(soup) if soup else "",
+            "html": html,
             "headers": dict(http_response.headers) if http_response else {},
         }
 
@@ -103,14 +103,35 @@ class CrawlHandlers:
         await context.push_data(page_data)
 
         # Discover and enqueue links within scope
-        await self._enqueue_scoped_links(context)
+        await self._enqueue_scoped_links(context, soup=soup)
 
         # Find and download document attachments (PDFs, DOCX, etc.)
-        await self._download_attachments(context)
+        await self._download_attachments(context, soup=soup)
 
-    async def _enqueue_scoped_links(self, context: AdaptivePlaywrightCrawlingContext) -> None:
+    async def _get_page_content(self, context):
+        """Extract HTML and BeautifulSoup from either httpx or Playwright context."""
+        from bs4 import BeautifulSoup
+
+        # httpx/BeautifulSoup path — context has .soup
+        soup = getattr(context, "soup", None)
+        if soup is not None:
+            return str(soup), soup
+
+        # Playwright path — context has .page
+        page = getattr(context, "page", None)
+        if page is not None:
+            html = await page.content()
+            soup = BeautifulSoup(html, "lxml")
+            return html, soup
+
+        return "", None
+
+    async def _enqueue_scoped_links(
+        self, context: AdaptivePlaywrightCrawlingContext, soup=None
+    ) -> None:
         """Extract links from the page and enqueue those matching the crawl plan scope."""
-        soup = context.soup
+        if soup is None:
+            soup = getattr(context, "soup", None)
         base_url = context.request.url
 
         if not soup:
@@ -146,9 +167,12 @@ class CrawlHandlers:
             await context.add_requests(requests)
             logger.debug("links_enqueued", count=len(requests), from_url=base_url)
 
-    async def _download_attachments(self, context: AdaptivePlaywrightCrawlingContext) -> None:
+    async def _download_attachments(
+        self, context: AdaptivePlaywrightCrawlingContext, soup=None
+    ) -> None:
         """Find download links (PDFs, DOCX, etc.) and download them via our FileDownloader."""
-        soup = context.soup
+        if soup is None:
+            soup = getattr(context, "soup", None)
         base_url = context.request.url
 
         if not soup:

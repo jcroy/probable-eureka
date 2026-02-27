@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 import structlog
 from crawlee import ConcurrencySettings, Request
 from crawlee.configuration import Configuration
-from crawlee.crawlers import AdaptivePlaywrightCrawler
 
 from webcollector.crawl.downloader import FileDownloader
 from webcollector.crawl.handlers import CrawlHandlers, make_result_checker
@@ -80,10 +79,53 @@ class CrawlRunner:
         return {
             "headless": True,
             "browser_type": "chromium",
+            "browser_launch_options": {
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+            },
             "browser_new_context_options": {
                 "user_agent": self._config.crawl.user_agent,
             },
         }
+
+    def _build_crawler(
+        self,
+        rendering_mode: str,
+        max_requests: int,
+        max_depth: int,
+        concurrency: ConcurrencySettings,
+        crawlee_config: Configuration,
+    ):
+        """Build the appropriate Crawlee crawler based on rendering mode.
+
+        Modes:
+          - "adaptive": AdaptivePlaywrightCrawler (httpx + Playwright fallback)
+          - "http_only": BeautifulSoupCrawler (httpx only, no browser needed)
+          - "playwright_only": PlaywrightCrawler (browser for every page)
+        """
+        shared_kwargs = {
+            "max_request_retries": self._config.crawl.max_retries,
+            "max_requests_per_crawl": max_requests,
+            "max_crawl_depth": max_depth,
+            "concurrency_settings": concurrency,
+            "request_handler_timeout": timedelta(minutes=5),
+            "configuration": crawlee_config,
+        }
+
+        if rendering_mode == "http_only":
+            from crawlee.crawlers import BeautifulSoupCrawler
+
+            logger.info("using_http_only_crawler")
+            return BeautifulSoupCrawler(**shared_kwargs)
+
+        # Default: adaptive (httpx + Playwright fallback)
+        from crawlee.crawlers import AdaptivePlaywrightCrawler
+
+        return AdaptivePlaywrightCrawler.with_beautifulsoup_static_parser(
+            **shared_kwargs,
+            respect_robots_txt_file=self._config.crawl.respect_robots_txt,
+            result_checker=make_result_checker(min_text_length=200),
+            playwright_crawler_specific_kwargs=self._build_playwright_kwargs(),
+        )
 
     async def run(self) -> CrawlResult:
         """Execute the crawl.
@@ -115,6 +157,8 @@ class CrawlRunner:
         max_requests = self._plan.max_pages or self._config.crawl.max_pages
         max_depth = self._plan.max_depth or self._config.crawl.max_depth
 
+        rendering_mode = self._config.browser.rendering_mode
+
         logger.info(
             "crawler_starting",
             seed_urls=len(self._plan.seed_urls),
@@ -122,18 +166,15 @@ class CrawlRunner:
             max_depth=max_depth,
             max_concurrency=self._config.crawl.max_concurrency,
             max_tasks_per_minute=self._config.crawl.max_tasks_per_minute,
+            rendering_mode=rendering_mode,
         )
 
-        crawler = AdaptivePlaywrightCrawler.with_beautifulsoup_static_parser(
-            max_request_retries=self._config.crawl.max_retries,
-            max_requests_per_crawl=max_requests,
-            max_crawl_depth=max_depth,
-            concurrency_settings=concurrency,
-            request_handler_timeout=timedelta(minutes=5),
-            respect_robots_txt_file=self._config.crawl.respect_robots_txt,
-            configuration=crawlee_config,
-            result_checker=make_result_checker(min_text_length=200),
-            playwright_crawler_specific_kwargs=self._build_playwright_kwargs(),
+        crawler = self._build_crawler(
+            rendering_mode=rendering_mode,
+            max_requests=max_requests,
+            max_depth=max_depth,
+            concurrency=concurrency,
+            crawlee_config=crawlee_config,
         )
 
         # Register our handler
