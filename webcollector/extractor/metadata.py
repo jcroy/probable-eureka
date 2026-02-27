@@ -49,12 +49,25 @@ _MONTH_ABBR = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
-# URL filename date pattern: "nov24_25tc.htm" → Nov 24, 2025
-# Matches: {mon}{dd}_{yy} where mon is 3-letter abbreviation
-_URL_DATE_RE = re.compile(
-    r"([a-z]{3})(\d{1,2})_(\d{2})",
-    re.IGNORECASE,
-)
+# URL date patterns, tried in order (most specific first):
+#
+# 1. /2025/11/24/slug  or /2025/11/24-slug  (WordPress, most blogs/news)
+# 2. /2025-11-24-slug  or /2025-11-24/slug  (Jekyll, Hugo, static site generators)
+# 3. /20251124-slug  or /20251124.html      (compact ISO in filename)
+# 4. /2025/nov/24/slug                      (Guardian-style month abbreviation)
+# 5. nov24_25tc.htm                         (Clerkbase-style: {mon}{dd}_{yy})
+_URL_DATE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # /YYYY/MM/DD (path segments)
+    (re.compile(r"/(\d{4})/(\d{1,2})/(\d{1,2})(?:/|$|-|\.)"), "ymd_slash"),
+    # /YYYY-MM-DD (hyphenated in path segment or filename)
+    (re.compile(r"/(\d{4})-(\d{1,2})-(\d{1,2})(?:/|$|-)"), "ymd_hyphen"),
+    # /YYYYMMDD (compact 8-digit in filename or path)
+    (re.compile(r"/(\d{4})(\d{2})(\d{2})(?:\D|$)"), "ymd_compact"),
+    # /YYYY/mon/DD (month abbreviation in path)
+    (re.compile(r"/(\d{4})/([a-z]{3})/(\d{1,2})(?:/|$)", re.IGNORECASE), "y_mon_d"),
+    # mon{dd}_{yy} in filename (Clerkbase-style)
+    (re.compile(r"([a-z]{3})(\d{1,2})_(\d{2})", re.IGNORECASE), "mon_d_yy"),
+]
 
 
 def extract_metadata(
@@ -115,25 +128,43 @@ def _parse_date(raw: str | None) -> date | None:
 def _find_date_in_url(url: str) -> date | None:
     """Extract a date from URL path components.
 
-    Handles patterns like:
-    - /2025/nov24_25tc.htm → 2025-11-24
-    - /sep08_25tc.htm → 2025-09-08
+    Tries multiple common URL date patterns (most specific first):
+    - /2025/11/24/article-slug   (WordPress, most blogs)
+    - /2025-11-24-article-slug   (Jekyll, Hugo)
+    - /20251124-article.html     (compact ISO)
+    - /2025/nov/24/headline      (Guardian-style)
+    - /nov24_25tc.htm            (Clerkbase-style)
     """
     try:
         path = urlparse(url).path
-        filename = path.rsplit("/", 1)[-1] if "/" in path else path
-        match = _URL_DATE_RE.search(filename)
-        if not match:
-            return None
-        mon_str, day_str, year_short = match.group(1), match.group(2), match.group(3)
-        month = _MONTH_ABBR.get(mon_str.lower())
-        if not month:
-            return None
-        day = int(day_str)
-        year = 2000 + int(year_short)
-        return date(year, month, day)
-    except (ValueError, IndexError):
+    except Exception:
         return None
+
+    for pattern, kind in _URL_DATE_PATTERNS:
+        match = pattern.search(path)
+        if not match:
+            continue
+        try:
+            if kind in ("ymd_slash", "ymd_hyphen", "ymd_compact"):
+                year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            elif kind == "y_mon_d":
+                year = int(match.group(1))
+                month = _MONTH_ABBR.get(match.group(2).lower(), 0)
+                day = int(match.group(3))
+                if not month:
+                    continue
+            elif kind == "mon_d_yy":
+                month = _MONTH_ABBR.get(match.group(1).lower(), 0)
+                if not month:
+                    continue
+                day = int(match.group(2))
+                year = 2000 + int(match.group(3))
+            else:
+                continue
+            return date(year, month, day)
+        except ValueError:
+            continue
+    return None
 
 
 def _find_prose_date_in_text(text: str) -> date | None:

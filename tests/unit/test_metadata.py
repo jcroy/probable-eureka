@@ -58,6 +58,7 @@ class TestExtractMetadata:
         assert meta.published_date == date(2025, 11, 24)
 
     def test_date_from_url_various_months(self):
+        """Clerkbase-style month abbreviation filenames."""
         for filename, expected in [
             ("jan15_26tc.htm", date(2026, 1, 15)),
             ("sep08_25tc.htm", date(2025, 9, 8)),
@@ -69,6 +70,43 @@ class TestExtractMetadata:
             )
             assert meta.published_date == expected, f"Failed for: {filename}"
 
+    def test_date_from_url_wordpress_style(self):
+        """WordPress/blog-style: /YYYY/MM/DD/slug."""
+        for url, expected in [
+            ("https://blog.com/2025/11/24/my-article", date(2025, 11, 24)),
+            ("https://news.com/2026/1/5/headline-here", date(2026, 1, 5)),
+            ("https://site.com/archive/2025/03/15/post.html", date(2025, 3, 15)),
+        ]:
+            meta = extract_metadata({}, text="No date.", url=url)
+            assert meta.published_date == expected, f"Failed for: {url}"
+
+    def test_date_from_url_jekyll_style(self):
+        """Jekyll/Hugo-style: /YYYY-MM-DD-slug."""
+        for url, expected in [
+            ("https://blog.com/2025-11-24-my-post", date(2025, 11, 24)),
+            ("https://site.com/posts/2026-01-05-title", date(2026, 1, 5)),
+        ]:
+            meta = extract_metadata({}, text="No date.", url=url)
+            assert meta.published_date == expected, f"Failed for: {url}"
+
+    def test_date_from_url_compact_iso(self):
+        """Compact 8-digit ISO in filename: /20251124-article.html."""
+        for url, expected in [
+            ("https://example.com/20251124-report.html", date(2025, 11, 24)),
+            ("https://example.com/docs/20260105.pdf", date(2026, 1, 5)),
+        ]:
+            meta = extract_metadata({}, text="No date.", url=url)
+            assert meta.published_date == expected, f"Failed for: {url}"
+
+    def test_date_from_url_guardian_style(self):
+        """Guardian-style: /YYYY/mon/DD/slug."""
+        for url, expected in [
+            ("https://guardian.com/2025/nov/24/headline", date(2025, 11, 24)),
+            ("https://news.com/2026/jan/5/story", date(2026, 1, 5)),
+        ]:
+            meta = extract_metadata({}, text="No date.", url=url)
+            assert meta.published_date == expected, f"Failed for: {url}"
+
     def test_url_date_does_not_override_html_meta(self):
         """HTML meta tag date should take priority over URL date."""
         meta = extract_metadata(
@@ -77,6 +115,18 @@ class TestExtractMetadata:
             url="https://example.com/nov24_25tc.htm",
         )
         assert meta.published_date == date(2026, 3, 15)
+
+    def test_url_no_false_positive_on_random_numbers(self):
+        """URLs with numbers that aren't dates shouldn't produce false positives."""
+        for url in [
+            "https://example.com/product/12345",
+            "https://example.com/page?id=999",
+            "https://example.com/v2/api/users",
+        ]:
+            meta = extract_metadata({}, text="No date.", url=url)
+            # These shouldn't extract a date from the URL
+            # (text fallback "No date." also won't match)
+            assert meta.published_date is None, f"False positive for: {url}"
 
     def test_prose_date_in_text(self):
         """Government minutes style: 'the 8th day of September 2025'."""
