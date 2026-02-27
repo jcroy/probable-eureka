@@ -1,32 +1,18 @@
 {
   "permissions": {
     "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "Read",
+      "Glob",
+      "Grep",
       "WebSearch",
-      "WebFetch(domain:docs.crawl4ai.com)",
-      "Bash(python discover.py:*)",
-      "Bash(python interactive_explore.py:*)",
-      "Bash(python js_doc_explorer.py:*)",
-      "Bash(curl:*)",
-      "Bash(python:*)",
-      "Bash(grep:*)",
-      "Bash(pip install:*)",
-      "Bash(claude mcp add:*)",
-      "Bash(git checkout:*)",
-      "Bash(git merge:*)",
-      "Bash(git push:*)",
-      "Bash(wc:*)",
-      "mcp__plugin_playwright_playwright__browser_navigate",
-      "mcp__plugin_playwright_playwright__browser_click",
-      "mcp__plugin_playwright_playwright__browser_close",
-      "mcp__plugin_playwright_playwright__browser_network_requests",
-      "WebFetch(domain:clerkshq.com)",
-      "Bash(python3:*)",
-      "Bash(git reset:*)",
-      "Bash(git add:*)",
-      "Bash(git check-ignore:*)",
-      "Bash(git commit:*)",
-      "Bash(gh api:*)",
-      "Bash(chmod:*)"
+      "WebFetch",
+      "NotebookEdit",
+      "Task",
+      "mcp__*",
+      "Bash(git -C /workspace log --oneline --all)"
     ]
   }
 }
