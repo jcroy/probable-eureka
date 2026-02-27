@@ -1,0 +1,19 @@
+# Legal: CourtListener recent federal opinions
+# Tests: long-form legal text, case citations, opinion PDFs
+intent_summary: Collect recent federal court opinions from CourtListener
+seed_urls:
+  - https://www.courtlistener.com/opinion/
+target_domains:
+  - courtlistener.com
+  - www.courtlistener.com
+url_patterns:
+  - /opinion/
+exclude_patterns:
+  - /accounts/
+  - /sign-in
+  - /donate
+document_types:
+  - html
+  - pdf
+max_depth: 2
+max_pages: 25

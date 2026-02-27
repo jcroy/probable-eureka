@@ -1,0 +1,17 @@
+# Job Board: Hacker News "Who is Hiring" threads
+# Tests: discussion/listing pages, varied text structure, link density
+intent_summary: Collect job listings from HN Who is Hiring threads
+seed_urls:
+  - https://news.ycombinator.com/item?id=42575537
+target_domains:
+  - news.ycombinator.com
+url_patterns:
+  - /item
+exclude_patterns:
+  - /user
+  - /login
+  - /submit
+document_types:
+  - html
+max_depth: 1
+max_pages: 10

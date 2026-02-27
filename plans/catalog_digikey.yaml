@@ -1,0 +1,22 @@
+# Product Catalog: Wikipedia's list of electronics (safe public site)
+# Tests: structured info, tables, category links, pagination
+# Using Wikipedia as a safe, crawlable alternative to commercial catalogs
+intent_summary: Collect electronics component information from Wikipedia
+seed_urls:
+  - https://en.wikipedia.org/wiki/List_of_Intel_processors
+target_domains:
+  - en.wikipedia.org
+url_patterns:
+  - /wiki/
+exclude_patterns:
+  - /wiki/Special:
+  - /wiki/Talk:
+  - /wiki/User:
+  - /wiki/Wikipedia:
+  - /wiki/Help:
+  - /wiki/File:
+  - /wiki/Category:
+document_types:
+  - html
+max_depth: 1
+max_pages: 15

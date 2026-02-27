@@ -1,0 +1,19 @@
+# News: Reuters world news section
+# Tests: article extraction, ad/boilerplate stripping, rich OG metadata
+intent_summary: Collect recent world news articles from Reuters
+seed_urls:
+  - https://www.reuters.com/world/
+target_domains:
+  - reuters.com
+  - www.reuters.com
+url_patterns:
+  - /world/
+exclude_patterns:
+  - /video/
+  - /pictures/
+  - /authors/
+  - /account/
+document_types:
+  - html
+max_depth: 2
+max_pages: 20

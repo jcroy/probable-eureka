@@ -1,0 +1,18 @@
+# Academic: arXiv recent CS.CL (computation & language) papers
+# Tests: abstracts, author metadata, citation info, PDF links
+intent_summary: Collect recent NLP paper abstracts from arXiv
+seed_urls:
+  - https://arxiv.org/list/cs.CL/recent
+target_domains:
+  - arxiv.org
+url_patterns:
+  - /abs/
+  - /list/cs.CL
+exclude_patterns:
+  - /pdf/  # Don't crawl PDF URLs as HTML pages
+  - /user/
+  - /auth/
+document_types:
+  - html
+max_depth: 2
+max_pages: 30

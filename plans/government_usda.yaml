@@ -1,0 +1,19 @@
+# Government: USDA Food Safety recalls and notices
+# Tests: deep hierarchies, PDF attachments, formal metadata, .gov structure
+intent_summary: Collect USDA food safety recall notices
+seed_urls:
+  - https://www.fsis.usda.gov/recalls
+target_domains:
+  - fsis.usda.gov
+url_patterns:
+  - /recalls
+  - /recall-case-archive
+exclude_patterns:
+  - /es/  # Spanish language duplicates
+  - /login
+  - /user
+document_types:
+  - html
+  - pdf
+max_depth: 2
+max_pages: 30

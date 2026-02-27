@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>[2401.12345] Attention Mechanisms in Large Language Models: A Survey</title>
+    <meta name="citation_title" content="Attention Mechanisms in Large Language Models: A Survey">
+    <meta name="citation_author" content="Chen, Wei">
+    <meta name="citation_author" content="Patel, Arun">
+    <meta name="citation_author" content="Mueller, Sarah">
+    <meta name="citation_date" content="2024-01-20">
+    <meta name="citation_pdf_url" content="https://arxiv.org/pdf/2401.12345">
+    <meta name="description" content="A comprehensive survey of attention mechanisms used in modern large language models, covering self-attention, multi-head attention, and recent efficient attention variants.">
+    <meta property="og:description" content="Survey of attention mechanisms in LLMs">
+</head>
+<body>
+<header>
+    <nav>
+        <a href="/">arXiv.org</a>
+        <a href="/list/cs.CL/recent">cs.CL</a>
+        <a href="/search">Search</a>
+    </nav>
+</header>
+<main>
+    <article class="paper">
+        <div class="paper-header">
+            <h1 class="title">Attention Mechanisms in Large Language Models: A Survey</h1>
+            <div class="authors">
+                <a href="/search/?query=Chen+Wei">Wei Chen</a><sup>1</sup>,
+                <a href="/search/?query=Patel+Arun">Arun Patel</a><sup>2</sup>,
+                <a href="/search/?query=Mueller+Sarah">Sarah Mueller</a><sup>1</sup>
+            </div>
+            <div class="affiliations">
+                <p><sup>1</sup>Stanford University, <sup>2</sup>MIT</p>
+            </div>
+            <div class="submission-info">
+                <time datetime="2024-01-20">Submitted: January 20, 2024</time>
+                <span class="arxiv-id">arXiv:2401.12345 [cs.CL]</span>
+            </div>
+        </div>
+
+        <div class="abstract">
+            <h2>Abstract</h2>
+            <p>Attention mechanisms have become the foundational building block of modern large language models (LLMs). Since the introduction of the Transformer architecture by Vaswani et al. (2017), self-attention has undergone significant evolution to address challenges in computational efficiency, context length, and representational capacity. This survey provides a comprehensive review of attention mechanism variants used in contemporary LLMs, including multi-head attention (MHA), grouped-query attention (GQA), multi-query attention (MQA), and recent proposals for linear and sub-quadratic attention. We analyze 150 papers published between 2020 and 2024, categorizing approaches by their computational complexity, memory requirements, and empirical performance across standard benchmarks. Our analysis reveals that while quadratic attention remains dominant in production systems, hybrid approaches combining local and global attention patterns show the most promise for scaling to longer contexts.</p>
+        </div>
+
+        <div class="paper-body">
+            <h2>1. Introduction</h2>
+            <p>The Transformer architecture (Vaswani et al., 2017) introduced self-attention as a mechanism for modeling dependencies between all pairs of positions in a sequence. Unlike recurrent architectures that process sequences step by step, self-attention computes relationships between all positions simultaneously, enabling better parallelization during training.</p>
+
+            <p>However, the quadratic computational and memory complexity of standard self-attention—O(n²d) where n is sequence length and d is the model dimension—has motivated extensive research into more efficient alternatives.</p>
+
+            <h2>2. Background</h2>
+            <p>Standard multi-head attention computes:</p>
+            <p class="equation">Attention(Q, K, V) = softmax(QK^T / √d_k)V</p>
+            <p>where Q, K, V are the query, key, and value matrices projected from the input sequence, and d_k is the dimension of each head.</p>
+
+            <h2>References</h2>
+            <ul class="references">
+                <li>[1] Vaswani, A. et al. "Attention is all you need." NeurIPS 2017.</li>
+                <li>[2] Dao, T. et al. "FlashAttention: Fast and memory-efficient exact attention." NeurIPS 2022.</li>
+                <li>[3] Ainslie, J. et al. "GQA: Training generalized multi-query transformer models." EMNLP 2023.</li>
+            </ul>
+        </div>
+
+        <div class="downloads">
+            <a href="/pdf/2401.12345">Download PDF</a>
+            <a href="/e-print/2401.12345">Source (tar.gz)</a>
+        </div>
+    </article>
+</main>
+<footer>
+    <p>arXiv is operated by Cornell University</p>
+</footer>
+</body>
+</html>

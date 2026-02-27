@@ -1,0 +1,18 @@
+# Finance: SEC EDGAR recent 10-K filings
+# Tests: tabular data, filing metadata, PDF/XLSX attachments
+intent_summary: Collect recent 10-K annual filings from SEC EDGAR
+seed_urls:
+  - https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=10-K&dateb=&owner=include&count=10&search_text=&action=getcompany
+target_domains:
+  - sec.gov
+url_patterns:
+  - /Archives/edgar/
+  - /cgi-bin/browse-edgar
+exclude_patterns:
+  - /cgi-bin/viewer
+  - /include/
+document_types:
+  - html
+  - pdf
+max_depth: 2
+max_pages: 30
