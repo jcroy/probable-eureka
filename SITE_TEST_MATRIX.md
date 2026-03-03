@@ -101,7 +101,7 @@ uv run webcollector export <run-id> --format jsonl --output results.jsonl
 | 2026-03-03 | GitHub | Medium | ✅ Works | 33 | 22 | 1,286 | Repo pages extracted |
 | 2026-03-03 | Dev.to | Medium | ✅ Works | 125 | 105 | 9,119 | Excellent article content |
 | 2026-03-03 | Stack Overflow | Medium | ⚠️ Partial | 66 | 2 | 864 | JS rendering, 14 deduped |
-| 2026-03-03 | Medium | Medium | ⏳ Running | - | 2 | 154 | JS-heavy, still crawling |
+| 2026-03-03 | Medium | Medium | ⚠️ Partial | 351 | 5 | 3,219 | JS-heavy, paywall limits |
 | 2026-03-03 | Twitter/X | Hard | ❌ Blocked | 2 | 1 | 25 | Login wall required |
 | 2026-03-03 | Investing.com | Hard | ❌ Timeout | 0 | 0 | - | 60s navigation timeout |
 | 2026-03-03 | Yahoo Finance | Hard | ❌ Blocked | 0 | 0 | - | 503 bot detection |
@@ -116,7 +116,7 @@ uv run webcollector export <run-id> --format jsonl --output results.jsonl
 **Medium Category: 2/4 passing (50%)**
 - GitHub, Dev.to work great with Playwright
 - Stack Overflow partial (JS rendering issues, only 2 unique docs)
-- Medium still running (JS-heavy paywall site)
+- Medium partial (351 pages → 5 docs, paywall + JS limits extraction)
 
 **Hard Category: 0/4 passing (0%)**
 - Auth walls and anti-bot protection blocking all
