@@ -7,7 +7,7 @@
 Describe what you want to collect in plain English. An agentic LLM researches the target site, builds a structured crawl plan, and a Crawlee-based crawler executes it — extracting content, deduplicating, and storing results in SQLite.
 
 ```bash
-webcollector collect "get the latest SEC EDGAR 10-K annual report filings"
+webcollector collect "get the top articles from dev.to about Python"
 ```
 
 No YAML. No selectors. No config files. Just a prompt.
@@ -85,14 +85,14 @@ Tested against a variety of site types (March 2026):
 
 | Site | Type | Documents | Avg Content |
 |------|------|-----------|-------------|
-| SEC EDGAR | Government filings | 55 | 20,597 chars |
+| Dev.to | Tech blog | 105 | 9,119 chars |
 | Wikipedia | Encyclopedia | 5 | 12,518 chars |
 | Python Docs | Documentation | 19 | 10,907 chars |
+| GitHub | Code repos | 22 | 1,286 chars |
 | Project Gutenberg | Book archive | 41 | 9,401 chars |
-| Dev.to | Tech blog | 105 | 9,119 chars |
 | Old Reddit | Forum | 43 | 1,398 chars |
 | Lobste.rs | Link aggregator | 44 | 1,037 chars |
-| GitHub | Code repos | 22 | 1,286 chars |
+| SEC EDGAR | Government filings | 55 | 20,597 chars |
 
 ### Partial Support
 
