@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -57,6 +58,7 @@ class RunOrchestrator:
         self._html_extractor = HTMLExtractor()
         self._pdf_extractor = PDFExtractor(config.extraction)
         self._dedup = DedupChecker()
+        self._dedup_lock = asyncio.Lock()  # Protects check-record-insert sequence
         self._stats = RunStats()
         self._stats_lock = asyncio.Lock()  # Protects concurrent stats updates
 
@@ -218,29 +220,43 @@ class RunOrchestrator:
                 logger.debug("outside_date_range", url=url, date=meta.published_date)
                 return
 
-            # Dedup check
+            # Dedup check (locked to prevent race between check and record)
             text_hash = content_hash_text(text)
-            if self._dedup.check_exact(text_hash):
-                async with self._stats_lock:
-                    self._stats.duplicates_found += 1
-                logger.debug("exact_duplicate_skipped", url=url)
-                return
+            async with self._dedup_lock:
+                if self._dedup.check_exact(text_hash):
+                    async with self._stats_lock:
+                        self._stats.duplicates_found += 1
+                    logger.debug("exact_duplicate_skipped", url=url)
+                    return
 
-            near_dup_id = self._dedup.check_near_duplicate(text)
-            is_duplicate = near_dup_id is not None
+                near_dup_id = self._dedup.check_near_duplicate(text)
+                is_duplicate = near_dup_id is not None
 
-            # Store raw HTML
+                # Record dedup state while holding lock to prevent races
+                doc_id = str(uuid4())
+                self._dedup.record_hash(text_hash)
+                sh = self._dedup.record_simhash(doc_id, text)
+
+            # Store raw HTML (atomic write to prevent corruption on concurrent access)
             html_bytes = html.encode("utf-8")
             raw_hash = sha256_hex(html_bytes)
             raw_rel_path = content_addressed_path(raw_hash, "html")
             raw_abs_path = Path(self._config.storage.file_store_path) / "raw" / raw_rel_path
             ensure_dir(raw_abs_path.parent)
-            raw_abs_path.write_bytes(html_bytes)
+            # Skip if already exists (content-addressed, same hash = same content)
+            if not raw_abs_path.exists():
+                # Atomic write: temp file + rename
+                import tempfile
 
-            # Build document record
-            doc_id = str(uuid4())
-            self._dedup.record_hash(text_hash)
-            sh = self._dedup.record_simhash(doc_id, text)
+                fd, tmp_path = tempfile.mkstemp(dir=raw_abs_path.parent, suffix=".tmp")
+                try:
+                    os.write(fd, html_bytes)
+                    os.close(fd)
+                    os.rename(tmp_path, raw_abs_path)
+                except Exception:
+                    os.close(fd) if fd else None
+                    Path(tmp_path).unlink(missing_ok=True)
+                    raise
 
             doc = {
                 "id": doc_id,

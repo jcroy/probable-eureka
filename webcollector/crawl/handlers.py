@@ -201,7 +201,11 @@ class CrawlHandlers:
                 if resp.status_code == 200 and "html" in resp.headers.get(
                     "content-type", ""
                 ):
-                    soup = BeautifulSoup(resp.text, "lxml")
+                    try:
+                        soup = BeautifulSoup(resp.text, "lxml")
+                    except Exception as e:
+                        logger.warning("soup_parse_failed", url=url, error=str(e))
+                        return "", None, resp.status_code
                     logger.info("refetch_honest_ua_ok", url=url)
                     return resp.text, soup, 200
                 return "", None, resp.status_code
@@ -224,7 +228,11 @@ class CrawlHandlers:
             url = context.request.url
             await self._run_js_interactions(page, url)
             html = await page.content()
-            soup = BeautifulSoup(html, "lxml")
+            try:
+                soup = BeautifulSoup(html, "lxml")
+            except Exception as e:
+                logger.warning("soup_parse_failed", url=url, error=str(e))
+                return html, None
             return html, soup
 
         return "", None
@@ -359,14 +367,17 @@ class CrawlHandlers:
         from crawlee import Request
 
         self._next_pages_followed += 1
+        # Preserve current depth so pagination doesn't bypass max_depth
+        current_depth = context.request.user_data.get("depth", 0)
         logger.info(
             "pagination_next_page",
             url=next_url,
             page_num=self._next_pages_followed,
             from_url=base_url,
+            depth=current_depth,
         )
         await context.add_requests(
-            [Request.from_url(next_url, user_data={"depth": 0})]
+            [Request.from_url(next_url, user_data={"depth": current_depth})]
         )
 
     async def _download_attachments(

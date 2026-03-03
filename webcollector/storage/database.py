@@ -154,7 +154,11 @@ class Database:
     async def insert_crawl_run(self, run: dict[str, Any]) -> str:
         """Insert a new crawl run. Returns the run ID."""
         async with self.engine.begin() as conn:
-            await conn.execute(crawl_runs.insert().values(**run))
+            result = await conn.execute(crawl_runs.insert().values(**run))
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    f"Failed to insert crawl_run {run['id']}: rowcount={result.rowcount}"
+                )
         return run["id"]
 
     async def update_crawl_run(self, run_id: str, updates: dict[str, Any]) -> None:
@@ -200,7 +204,11 @@ class Database:
     async def insert_document(self, doc: dict[str, Any]) -> str:
         """Insert a document. Returns the document ID."""
         async with self.engine.begin() as conn:
-            await conn.execute(documents.insert().values(**doc))
+            result = await conn.execute(documents.insert().values(**doc))
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    f"Failed to insert document {doc['id']}: rowcount={result.rowcount}"
+                )
         return doc["id"]
 
     async def get_document(self, doc_id: str) -> dict[str, Any] | None:
@@ -278,7 +286,11 @@ class Database:
     async def insert_attachment(self, attachment: dict[str, Any]) -> str:
         """Insert an attachment. Returns the attachment ID."""
         async with self.engine.begin() as conn:
-            await conn.execute(attachments.insert().values(**attachment))
+            result = await conn.execute(attachments.insert().values(**attachment))
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    f"Failed to insert attachment {attachment['id']}: rowcount={result.rowcount}"
+                )
         return attachment["id"]
 
     async def count_attachments(self, crawl_run_id: str) -> int:
@@ -316,7 +328,11 @@ class Database:
     async def insert_source(self, source: dict[str, Any]) -> str:
         """Insert a source. Returns the source ID."""
         async with self.engine.begin() as conn:
-            await conn.execute(sources.insert().values(**source))
+            result = await conn.execute(sources.insert().values(**source))
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    f"Failed to insert source {source['id']}: rowcount={result.rowcount}"
+                )
         return source["id"]
 
     async def list_sources(self, crawl_run_id: str) -> list[dict[str, Any]]:

@@ -1,6 +1,7 @@
 """Tests for webcollector.storage.dedup."""
 
 from webcollector.storage.dedup import (
+    EMPTY_TEXT_SIMHASH,
     DedupChecker,
     content_hash_text,
     hamming_distance,
@@ -34,7 +35,8 @@ class TestSimhash:
         assert isinstance(result, int)
 
     def test_empty_text(self):
-        assert simhash("") == 0
+        """Empty text returns sentinel value that prevents false matches."""
+        assert simhash("") == EMPTY_TEXT_SIMHASH
 
     def test_similar_texts_close_hashes(self):
         text_a = (
@@ -70,6 +72,12 @@ class TestHammingDistance:
 class TestIsNearDuplicate:
     def test_identical_is_duplicate(self):
         assert is_near_duplicate(42, 42) is True
+
+    def test_empty_text_never_matches(self):
+        """Empty text sentinel should never match anything, including itself."""
+        assert is_near_duplicate(EMPTY_TEXT_SIMHASH, EMPTY_TEXT_SIMHASH) is False
+        assert is_near_duplicate(EMPTY_TEXT_SIMHASH, 42) is False
+        assert is_near_duplicate(42, EMPTY_TEXT_SIMHASH) is False
 
     def test_close_is_duplicate(self):
         assert is_near_duplicate(0b1010, 0b1011, threshold=1) is True

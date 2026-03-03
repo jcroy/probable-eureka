@@ -265,6 +265,8 @@ class CrawlRunner:
         try:
             await crawler.run(seed_requests)
         finally:
+            # Stop the crawler to ensure browser processes are cleaned up
+            await crawler.stop()
             await self._downloader.close()
 
         pages_crawled = self._handlers.pages_crawled
