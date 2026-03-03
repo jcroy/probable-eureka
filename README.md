@@ -1,5 +1,7 @@
 # webcollector
 
+> **Status: Proof of Concept** — Core functionality works across many site types. See [Site Compatibility](#site-compatibility) for tested sites.
+
 **Prompt-driven web crawling and document collection tool.**
 
 Describe what you want to collect in plain English. An agentic LLM researches the target site, builds a structured crawl plan, and a Crawlee-based crawler executes it — extracting content, deduplicating, and storing results in SQLite.
@@ -16,6 +18,7 @@ No YAML. No selectors. No config files. Just a prompt.
 
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
+- [Site Compatibility](#site-compatibility)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Architecture](#architecture)
@@ -24,6 +27,7 @@ No YAML. No selectors. No config files. Just a prompt.
 - [Pagination](#pagination)
 - [JS-Heavy Sites](#js-heavy-sites)
 - [Storage & Deduplication](#storage--deduplication)
+- [Known Limitations](#known-limitations)
 - [Development](#development)
 - [License](#license)
 
@@ -70,6 +74,44 @@ uv run webcollector list-runs
 uv run webcollector report <run-id>
 uv run webcollector export <run-id> --format jsonl --output results.jsonl
 ```
+
+---
+
+## Site Compatibility
+
+Tested against a variety of site types (March 2026):
+
+### Works Well
+
+| Site | Type | Documents | Avg Content |
+|------|------|-----------|-------------|
+| SEC EDGAR | Government filings | 55 | 20,597 chars |
+| Wikipedia | Encyclopedia | 5 | 12,518 chars |
+| Python Docs | Documentation | 19 | 10,907 chars |
+| Project Gutenberg | Book archive | 41 | 9,401 chars |
+| Dev.to | Tech blog | 105 | 9,119 chars |
+| Old Reddit | Forum | 43 | 1,398 chars |
+| Lobste.rs | Link aggregator | 44 | 1,037 chars |
+| GitHub | Code repos | 22 | 1,286 chars |
+
+### Partial Support
+
+| Site | Issue | Notes |
+|------|-------|-------|
+| Stack Overflow | JS rendering | Only 2 docs extracted from 66 pages |
+| Medium | Paywall + JS | 5 docs from 351 pages |
+| Hacker News | Link-list detection | Flagged as low content (expected) |
+
+### Blocked (Known Limitations)
+
+| Site | Blocker |
+|------|---------|
+| Twitter/X | Login wall required |
+| LinkedIn | Auth + anti-bot |
+| Yahoo Finance | 503 bot detection |
+| Investing.com | Cloudflare protection |
+| Reuters | 401 session block |
+| Bloomberg | Heavy paywall |
 
 ---
 
@@ -491,6 +533,34 @@ The first two characters of the SHA-256 hash form a sharding directory, keeping 
 
 ---
 
+## Known Limitations
+
+### Anti-Bot Protection
+
+Sites using Cloudflare, Akamai, or similar bot detection will block or timeout. Examples: Investing.com, Yahoo Finance.
+
+**Workaround**: None currently. These require browser fingerprint spoofing or CAPTCHA solving services.
+
+### Authentication Walls
+
+Sites requiring login (Twitter/X, LinkedIn, Instagram) cannot be crawled without credentials.
+
+**Workaround**: None currently. Future versions may support cookie injection or OAuth flows.
+
+### Heavy JavaScript Sites
+
+Some JS-heavy sites (Stack Overflow question lists, Medium) render content that Playwright captures but extraction yields limited results due to dynamic DOM timing.
+
+**Workaround**: Use `playwright_only` rendering mode and add explicit `wait_for_selector` JS interactions in your crawl plan.
+
+### Link-List Pages
+
+Pages that are primarily lists of links (Hacker News front page, Reddit listings) are flagged as "low content quality" because extracted text is minimal.
+
+**Note**: This is expected behavior — the crawler is optimized for content pages, not navigation pages.
+
+---
+
 ## Development
 
 ### Running Tests
@@ -505,14 +575,13 @@ uv run pytest --cov=webcollector
 # Single file
 uv run pytest tests/unit/test_database.py
 
-# Single test
-uv run pytest tests/unit/test_database.py::test_insert_document
-
 # Verbose
 uv run pytest -v
 ```
 
-252 tests across 13 test modules covering: URL utilities, crawl plan validation, pagination handling, JS interactions, HTML/PDF extraction, metadata parsing, deduplication, database CRUD, prompt interpretation, pipeline orchestration, and cross-domain scoping.
+Unit tests cover: URL utilities, crawl plan validation, pagination handling, JS interactions, HTML/PDF extraction, metadata parsing, deduplication, database operations, and pipeline orchestration.
+
+For site compatibility testing, see [SITE_TEST_MATRIX.md](SITE_TEST_MATRIX.md).
 
 ### Linting & Type Checking
 
