@@ -11,6 +11,7 @@ This is the main entry point for executing a crawl. It:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date, datetime
 from pathlib import Path
@@ -57,6 +58,7 @@ class RunOrchestrator:
         self._pdf_extractor = PDFExtractor(config.extraction)
         self._dedup = DedupChecker()
         self._stats = RunStats()
+        self._stats_lock = asyncio.Lock()  # Protects concurrent stats updates
 
     @property
     def run_id(self) -> str:
@@ -187,7 +189,8 @@ class RunOrchestrator:
             if html_len > 5000 and text_len > 0:
                 ratio = text_len / html_len
                 if ratio < 0.05:
-                    self._stats.low_content_quality += 1
+                    async with self._stats_lock:
+                        self._stats.low_content_quality += 1
                     logger.warning(
                         "low_content_quality",
                         url=url,
@@ -200,22 +203,26 @@ class RunOrchestrator:
             # matches what the user asked for (plan keywords)
             if url in self._plan.seed_urls and self._plan.keywords:
                 if not self._check_intent_match(text, url):
-                    self._stats.content_mismatches += 1
+                    async with self._stats_lock:
+                        self._stats.content_mismatches += 1
 
             # Track pages with no detected date when a date range is active
             if self._has_date_range() and meta.published_date is None:
-                self._stats.no_date_detected += 1
+                async with self._stats_lock:
+                    self._stats.no_date_detected += 1
 
             # Date range filter
             if not self._is_in_date_range(meta.published_date):
-                self._stats.filtered_by_date += 1
+                async with self._stats_lock:
+                    self._stats.filtered_by_date += 1
                 logger.debug("outside_date_range", url=url, date=meta.published_date)
                 return
 
             # Dedup check
             text_hash = content_hash_text(text)
             if self._dedup.check_exact(text_hash):
-                self._stats.duplicates_found += 1
+                async with self._stats_lock:
+                    self._stats.duplicates_found += 1
                 logger.debug("exact_duplicate_skipped", url=url)
                 return
 
@@ -264,14 +271,17 @@ class RunOrchestrator:
             }
 
             await self._db.insert_document(doc)
-            self._stats.documents_stored += 1
-            self._stats.bytes_downloaded += len(html_bytes)
+            async with self._stats_lock:
+                self._stats.documents_stored += 1
+                self._stats.bytes_downloaded += len(html_bytes)
+                if is_duplicate:
+                    self._stats.duplicates_found += 1
 
-            if is_duplicate:
-                self._stats.duplicates_found += 1
-
+        except (asyncio.CancelledError, SystemExit):
+            raise
         except Exception:
-            self._stats.errors += 1
+            async with self._stats_lock:
+                self._stats.errors += 1
             logger.error("page_processing_failed", url=url, exc_info=True)
 
     async def _on_file_downloaded(
@@ -279,8 +289,9 @@ class RunOrchestrator:
     ) -> None:
         """Callback: process a downloaded file (PDF, DOCX, etc.)."""
         try:
-            self._stats.files_downloaded += 1
-            self._stats.bytes_downloaded += result.file_size
+            async with self._stats_lock:
+                self._stats.files_downloaded += 1
+                self._stats.bytes_downloaded += result.file_size
 
             # For PDFs, extract text via Mistral OCR / pdfplumber
             extracted_text = ""
@@ -296,9 +307,11 @@ class RunOrchestrator:
                     if extracted_text and self._has_date_range():
                         pdf_meta = extract_metadata({}, text=extracted_text)
                         if pdf_meta.published_date is None:
-                            self._stats.no_date_detected += 1
+                            async with self._stats_lock:
+                                self._stats.no_date_detected += 1
                         if not self._is_in_date_range(pdf_meta.published_date):
-                            self._stats.filtered_by_date += 1
+                            async with self._stats_lock:
+                                self._stats.filtered_by_date += 1
                             logger.debug(
                                 "attachment_outside_date_range",
                                 url=result.url,
@@ -341,8 +354,11 @@ class RunOrchestrator:
                 has_text=bool(extracted_text),
             )
 
+        except (asyncio.CancelledError, SystemExit):
+            raise
         except Exception:
-            self._stats.errors += 1
+            async with self._stats_lock:
+                self._stats.errors += 1
             logger.error(
                 "file_processing_failed", url=result.url, exc_info=True
             )

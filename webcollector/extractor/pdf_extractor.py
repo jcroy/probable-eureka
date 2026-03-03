@@ -124,6 +124,20 @@ class PDFExtractor:
 
     async def _extract_mistral_file(self, file_path: Path) -> PDFExtractionResult:
         """Call Mistral OCR API with base64-encoded file data."""
+        # Check file size to prevent OOM on large PDFs
+        # base64 expands by ~33%, so 100MB PDF becomes ~133MB in memory
+        max_size = self._config.max_pdf_size_bytes
+        file_size = file_path.stat().st_size
+        if file_size > max_size:
+            logger.warning(
+                "pdf_too_large_for_ocr",
+                path=str(file_path),
+                size=file_size,
+                max_size=max_size,
+            )
+            # Fall back to local extraction for large files
+            return self._extract_local(file_path)
+
         client = self._get_mistral_client()
 
         file_data = file_path.read_bytes()

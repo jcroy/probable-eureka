@@ -6,9 +6,9 @@ Code review findings from 2026-03-03. Tracking fixes in priority order.
 
 | # | Issue | Location | Status |
 |---|-------|----------|--------|
-| 1 | CancelledError swallowed | `orchestrator.py:273-275, 344` | [ ] TODO |
-| 2 | PDF OOM risk (no size limit) | `pdf_extractor.py:129-130` | [ ] TODO |
-| 3 | Stats race condition | `orchestrator.py:267-268, 417-430` | [ ] TODO |
+| 1 | CancelledError swallowed | `orchestrator.py:273-275, 344` | [x] FIXED |
+| 2 | PDF OOM risk (no size limit) | `pdf_extractor.py:129-130` | [x] FIXED |
+| 3 | Stats race condition | `orchestrator.py:267-268, 417-430` | [x] FIXED |
 
 ## High Severity Issues
 
@@ -31,4 +31,19 @@ Code review findings from 2026-03-03. Tracking fixes in priority order.
 
 ## Change Log
 
-_Updates will be logged here as fixes are committed._
+### 2026-03-03 - Critical fixes
+
+**Issue #1: CancelledError swallowed**
+- Added `except (asyncio.CancelledError, SystemExit): raise` before generic exception handlers
+- Affects `_on_page_crawled` and `_on_file_downloaded` callbacks
+- Enables graceful shutdown on Ctrl+C
+
+**Issue #2: PDF OOM risk**
+- Added file size check in `_extract_mistral_file()` before loading PDF into memory
+- Falls back to local pdfplumber extraction for files > `max_pdf_size_bytes` (default 100MB)
+- Added `max_pdf_size_bytes` config option to `ExtractionConfig`
+
+**Issue #3: Stats race condition**
+- Added `_stats_lock` (asyncio.Lock) to RunOrchestrator
+- Wrapped all stats counter increments with `async with self._stats_lock:`
+- Prevents lost increments under concurrent callback execution

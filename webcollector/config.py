@@ -60,6 +60,7 @@ class ExtractionConfig(BaseModel):
     local_ocr_languages: list[str] = Field(default_factory=lambda: ["eng"])
     llm_metadata: bool = False
     max_text_length: int = 500_000
+    max_pdf_size_bytes: int = 100 * 1024 * 1024  # 100MB - larger PDFs use local extraction
 
     @property
     def mistral_api_key(self) -> str | None:
