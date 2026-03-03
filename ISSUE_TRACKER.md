@@ -27,6 +27,14 @@ Code review findings from 2026-03-03. Tracking fixes in priority order.
 |---|-------|----------|--------|
 | 10 | Unprotected BeautifulSoup parsing | `handlers.py:204, 227` | [x] FIXED |
 
+## Feature Gaps (found during testing)
+
+| # | Issue | Impact | Status |
+|---|-------|--------|--------|
+| 11 | Anti-bot bypass needed | Sites like investing.com, yahoo finance block crawlers | [ ] TODO |
+| 12 | Link-list pages get dropped | HN-style pages flagged as low_content_quality | [ ] TODO |
+| 13 | No Cloudflare challenge handling | Many finance sites use CF protection | [ ] TODO |
+
 ---
 
 ## Change Log
