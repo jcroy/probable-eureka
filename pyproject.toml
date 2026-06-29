@@ -9,6 +9,9 @@ description = "Prompt-driven web crawling and document collection tool"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
 dependencies = [
     # Crawl engine
     "crawlee[beautifulsoup,parsel,playwright]>=1.4.0",

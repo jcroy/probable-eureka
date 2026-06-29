@@ -623,8 +623,11 @@ Ruff rules: `E, F, I, N, W, UP, B, SIM` with a 100-character line limit.
 
 ## License
 
-[PolyForm Noncommercial License 1.0.0](LICENSE) — free for any noncommercial
-purpose (personal, research, education, nonprofit, government). **Commercial use
-requires a separate license.** To obtain one, contact Julien <jcroy2828@gmail.com>.
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0) — free and open
+source. You may use, modify, and distribute it, including for commercial
+purposes, provided that derivative works **and network-hosted services** are
+also released under the AGPL-3.0 with their complete source made available.
 
-This is a source-available license, not an OSI-approved open-source license.
+Copyright (C) 2026 Julien <jcroy2828@gmail.com>
+
+This is an [OSI-approved](https://opensource.org/license/agpl-v3) open-source license.
