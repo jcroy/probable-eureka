@@ -623,4 +623,8 @@ Ruff rules: `E, F, I, N, W, UP, B, SIM` with a 100-character line limit.
 
 ## License
 
-Apache-2.0
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for any noncommercial
+purpose (personal, research, education, nonprofit, government). **Commercial use
+requires a separate license.** To obtain one, contact Julien <jcroy2828@gmail.com>.
+
+This is a source-available license, not an OSI-approved open-source license.
